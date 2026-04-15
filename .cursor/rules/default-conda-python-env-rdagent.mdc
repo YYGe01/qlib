@@ -1,0 +1,18 @@
+---
+description: 本仓库默认使用 conda 环境 rdagent 运行 Python/依赖与测试
+alwaysApply: true
+---
+
+# Conda 环境：rdagent
+
+本 **qlib** 项目在本地开发时，**默认 Conda 环境名为 `rdagent`**。
+
+1. **在终端执行** `python`、`pip`、`pytest`、`qrun` 或本仓库脚本前，应先激活环境：
+
+   ```bash
+   conda activate rdagent
+   ```
+
+2. **安装或升级依赖**、**跑示例与测试**时，均应在已激活的 `rdagent` 环境中进行，避免误用 base 或其他环境导致版本不一致。
+
+3. 若用户说明使用其他环境，以用户当前指定为准；未指定时按 **`rdagent`** 处理。

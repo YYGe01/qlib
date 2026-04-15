@@ -1,6 +1,7 @@
 #  Copyright (c) Microsoft Corporation.
 #  Licensed under the MIT License.
 
+import os
 import re
 import copy
 import importlib
@@ -51,6 +52,70 @@ _CALENDAR_MAP = {}
 
 # NOTE: Until 2020-10-20 20:00:00
 MINIMUM_SYMBOLS_NUM = 3900
+
+# 沪深 A 股列表：auto=优先 Baostock（开源免费），不足或失败则回退东财；eastmoney=仅用东财。
+_HS_SYMBOLS_SOURCE_ENV = "QLIB_HS_SYMBOLS_SOURCE"
+
+
+def _baostock_code_to_yahoo_symbol(code: str, trade_status: str):
+    """将 Baostock 的 code（如 sh.600000）转为 yahooquery 后缀，规则对齐东财分页结果的过滤。"""
+    if trade_status == "3":
+        return None
+    if "." not in code:
+        return None
+    mkt, num = code.split(".", 1)
+    if not num.isdigit() or len(num) != 6:
+        return None
+    if mkt == "sh" and num.startswith("6"):
+        return f"{num}.ss"
+    if mkt == "sz" and num.startswith("399"):
+        return None
+    if mkt == "sz" and (num.startswith("0") or num.startswith("3")):
+        return f"{num}.sz"
+    return None
+
+
+def _bs_error_ok(code) -> bool:
+    return code in ("0", 0) or str(code) == "0"
+
+
+def _get_hs_symbols_from_baostock() -> set:
+    """通过 Baostock query_all_stock 获取沪深 A 股 Yahoo 代码集合（开源免费，见 http://baostock.com ）。"""
+    import baostock as bs  # pylint: disable=C0415
+    from datetime import date, timedelta  # pylint: disable=C0415
+
+    lg = bs.login()
+    if not _bs_error_ok(lg.error_code):
+        raise RuntimeError(getattr(lg, "error_msg", "") or "baostock 登录失败")
+    try:
+        for i in range(20):
+            day = (date.today() - timedelta(days=i)).strftime("%Y-%m-%d")
+            rs = bs.query_all_stock(day=day)
+            if not _bs_error_ok(rs.error_code):
+                logger.warning("Baostock query_all_stock({}) 失败: {}", day, getattr(rs, "error_msg", ""))
+                continue
+            symbols = set()
+            row_cap = 20000
+            n = 0
+            while rs.next():
+                n += 1
+                if n > row_cap:
+                    logger.warning("Baostock query_all_stock 行数超过 {}，中止当日解析", row_cap)
+                    break
+                row = rs.get_row_data()
+                status = row[1] if len(row) > 1 else "1"
+                y = _baostock_code_to_yahoo_symbol(row[0], status)
+                if y:
+                    symbols.add(y)
+            if len(symbols) >= MINIMUM_SYMBOLS_NUM:
+                logger.info("Baostock 于 {} 解析得 {} 只 A 股（Yahoo 代码）", day, len(symbols))
+                return symbols
+            logger.warning("Baostock {} 仅解析 {} 只股票，尝试更早日期", day, len(symbols))
+    finally:
+        bs.logout()
+    raise ValueError(
+        f"Baostock 连续尝试后仍不足 {MINIMUM_SYMBOLS_NUM} 只股票，请检查网络或 baostock 服务状态"
+    )
 
 
 def get_calendar_list(bench_code="CSI300") -> List[pd.Timestamp]:
@@ -257,11 +322,28 @@ def get_hs_stock_symbols() -> list:
 
     if _HS_SYMBOLS is None:
         symbols = set()
-        _retry = 60
-        # It may take multiple times to get the complete
-        while len(symbols) < MINIMUM_SYMBOLS_NUM:
-            symbols |= _get_symbol()
-            time.sleep(3)
+        src = (os.environ.get(_HS_SYMBOLS_SOURCE_ENV) or "auto").strip().lower()
+        if src == "eastmoney":
+            logger.info("QLIB_HS_SYMBOLS_SOURCE=eastmoney，仅使用东方财富全市场列表接口")
+        elif src == "baostock":
+            logger.info("QLIB_HS_SYMBOLS_SOURCE=baostock，仅使用 Baostock")
+            try:
+                symbols = _get_hs_symbols_from_baostock()
+            except ImportError as e:
+                raise ImportError("QLIB_HS_SYMBOLS_SOURCE=baostock 时需安装: pip install baostock") from e
+        else:
+            try:
+                symbols = _get_hs_symbols_from_baostock()
+            except ImportError:
+                logger.warning("未安装 baostock（pip install baostock），回退为东方财富接口")
+            except Exception as e:
+                logger.warning("Baostock 获取 A 股列表失败: {}，回退为东方财富接口", e)
+
+        if len(symbols) < MINIMUM_SYMBOLS_NUM:
+            _retry = 60
+            while len(symbols) < MINIMUM_SYMBOLS_NUM:
+                symbols |= _get_symbol()
+                time.sleep(3)
 
         symbol_cache_path = Path("~/.cache/hs_symbols_cache.pkl").expanduser().resolve()
         symbol_cache_path.parent.mkdir(parents=True, exist_ok=True)

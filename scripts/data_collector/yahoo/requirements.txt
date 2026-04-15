@@ -1,5 +1,6 @@
 loguru
 fire
+baostock
 requests
 numpy
 pandas
