@@ -245,6 +245,44 @@ tar -zxvf qlib_bin.tar.gz -C ~/.qlib/qlib_data/cn_data --strip-components=2
 rm -f qlib_bin.tar.gz
 ```
 
+### 4.1.1 一键脚本：下载社区版并解压到 `cn_data`
+
+下面脚本等价于上一节的分步命令，便于保存为 `download_community_cn_data.sh` 后执行，或通过 `bash -s` 管道运行。默认目标目录为 `~/.qlib/qlib_data/cn_data`；可将**第一个参数**设为其它路径。
+
+**说明**：`tar` 的 `--strip-components` 取决于 Release 包内顶层目录层数。本仓库根目录 `README.md` 的「Data Preparation」示例使用 **`1`**；`scripts/data_collector/crowd_source/README.md` 使用 **`2`**。解压后请在 `target` 下确认已出现 `calendars/`、`features/`、`instruments/`；若多一层空壳目录，请调整该数值后删除错误内容再重新解压。
+
+```bash
+#!/usr/bin/env bash
+# 从社区 investment_data Release 下载 Qlib 二进制包并解压为中国区数据根目录（cn_data）
+set -euo pipefail
+
+TARGET="${1:-${HOME}/.qlib/qlib_data/cn_data}"
+# 与 crowd_source/README.md 一致；若解压后结构不对可改为 1（见项目根 README 示例）
+STRIP_COMPONENTS="${STRIP_COMPONENTS:-2}"
+URL="https://github.com/chenditc/investment_data/releases/latest/download/qlib_bin.tar.gz"
+ARCHIVE="${TMPDIR:-/tmp}/qlib_bin_community_$$.tar.gz"
+
+mkdir -p "${TARGET}"
+wget -O "${ARCHIVE}" "${URL}"
+tar -zxvf "${ARCHIVE}" -C "${TARGET}" --strip-components="${STRIP_COMPONENTS}"
+rm -f "${ARCHIVE}"
+
+echo "完成。请检查: ls \"${TARGET}\" 是否包含 calendars features instruments"
+```
+
+使用示例：
+
+```bash
+# 默认 ~/.qlib/qlib_data/cn_data
+bash download_community_cn_data.sh
+
+# 指定目录
+bash download_community_cn_data.sh /data/qlib/cn_data
+
+# 需要与根目录 README 相同的 strip 层数时
+STRIP_COMPONENTS=1 bash download_community_cn_data.sh
+```
+
 ### 4.2 「其它渠道」指什么
 
 指**任意发布方**提供的、与本文第 2 节目录约定一致的 Qlib 二进制包或同步目录（例如论坛网盘、机构内部分享、个人镜像等）。**微软不背书这些包的内容与更新节奏**；使用前请自行核对字段、日期范围与 `strip-components`。
@@ -447,6 +485,7 @@ A：可以，`provider_uri` 与所有脚本中的 `--qlib_dir` / `--qlib_data_1d
 | 文件 | 内容 |
 |------|------|
 | `scripts/README.md` | `get_data`、初始化示例、社区包解压 |
+| 本文 §4.1.1 | 社区 Release 一键下载解压到 `cn_data` 的 shell 脚本 |
 | `scripts/data_collector/README.md` | 数据集字段与目录约定总览 |
 | `scripts/data_collector/yahoo/README.md` | Yahoo 下载、归一化、`dump_all`、`update_data_to_bin`、crontab |
 | `scripts/dump_bin.py` | `dump_all` / `dump_fix` / `dump_update` |
