@@ -485,7 +485,7 @@ A：可以，`provider_uri` 与所有脚本中的 `--qlib_dir` / `--qlib_data_1d
 | 文件 | 内容 |
 |------|------|
 | `scripts/README.md` | `get_data`、初始化示例、社区包解压 |
-| 本文 §4.1.1 | 社区 Release 一键下载解压到 `cn_data` 的 shell 脚本 |
+| 本文第 4.1.1 节 | 社区 Release 一键下载解压到 `cn_data` 的 shell 脚本 |
 | `scripts/data_collector/README.md` | 数据集字段与目录约定总览 |
 | `scripts/data_collector/yahoo/README.md` | Yahoo 下载、归一化、`dump_all`、`update_data_to_bin`、crontab |
 | `scripts/dump_bin.py` | `dump_all` / `dump_fix` / `dump_update` |
