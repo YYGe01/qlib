@@ -54,7 +54,7 @@ _CALENDAR_MAP = {}
 # NOTE: Until 2020-10-20 20:00:00
 MINIMUM_SYMBOLS_NUM = 3900
 
-# 沪深 A 股列表：auto=优先 Baostock（开源免费），不足或失败则回退东财；eastmoney=仅用东财。
+# 沪深 A 股列表：auto=优先东方财富，失败或数量不足则 Baostock；eastmoney=仅用东财；baostock=仅用 Baostock。
 _HS_SYMBOLS_SOURCE_ENV = "QLIB_HS_SYMBOLS_SOURCE"
 
 
@@ -341,12 +341,24 @@ def get_hs_stock_symbols() -> list:
             except ImportError as e:
                 raise ImportError("QLIB_HS_SYMBOLS_SOURCE=baostock 时需安装: pip install baostock") from e
         else:
+            # auto：东财优先，异常或少于阈值再尝试 Baostock
+            logger.info(
+                "QLIB_HS_SYMBOLS_SOURCE=auto（默认）：优先东方财富全市场列表，不足或失败时回退 Baostock"
+            )
             try:
-                symbols = _get_hs_symbols_from_baostock()
-            except ImportError:
-                logger.warning("未安装 baostock（pip install baostock），回退为东方财富接口")
+                symbols = _get_symbol()
             except Exception as e:
-                logger.warning("Baostock 获取 A 股列表失败: {}，回退为东方财富接口", e)
+                logger.warning("东方财富获取 A 股列表失败: {}，将尝试 Baostock", e)
+                symbols = set()
+            if len(symbols) < MINIMUM_SYMBOLS_NUM:
+                try:
+                    symbols |= _get_hs_symbols_from_baostock()
+                    if symbols:
+                        logger.info("Baostock 回退/补充后标的数量: {}", len(symbols))
+                except ImportError:
+                    logger.warning("未安装 baostock（pip install baostock），无法使用 Baostock 回退")
+                except Exception as e:
+                    logger.warning("Baostock 获取 A 股列表失败: {}", e)
 
         if len(symbols) < MINIMUM_SYMBOLS_NUM:
             _retry = 60
