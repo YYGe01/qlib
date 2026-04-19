@@ -34,7 +34,7 @@
 #   QLIB_DATA_1D=~/.qlib/qlib_data/cn_data ./run_cn_incremental_update.sh
 #
 # 环境变量（可选）
-#   CONDA_ENV        默认 ai-trade
+#   CONDA_ENV        默认 ai-trader
 #   CONDA_ROOT       优先使用；否则用 conda info --base
 #   END_DATE         Yahoo 区间右端 YYYY-MM-DD（开区间，不含该日）；默认「今天」本地日期
 #   SKIP_HEALTH=1    跳过脚本末尾的 check_data_health 步骤
@@ -66,7 +66,7 @@ QLIB_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 QLIB_DATA_1D="${1:-${QLIB_DATA_1D:-${HOME}/.qlib/qlib_data/cn_data}}"
 
 # ---------- (A) Conda 环境名（与仓库 .cursor 约定一致，可覆盖）----------
-CONDA_ENV="${CONDA_ENV:-ai-trade}"
+CONDA_ENV="${CONDA_ENV:-ai-trader}"
 # ---------- (A) SKIP_HEALTH=1 时跳过文末 check_data_health ----------
 SKIP_HEALTH="${SKIP_HEALTH:-0}"
 # ---------- (A) 传给 Python 的 --end_date：Yahoo 区间为左闭右开 [start, end) ----------
