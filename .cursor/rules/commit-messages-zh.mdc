@@ -1,0 +1,18 @@
+---
+description: 生成 Git commit message 时统一使用简体中文
+alwaysApply: true
+---
+
+# Git 提交说明语言
+
+- 使用 Cursor 生成或补全 **Git commit message** 时，**必须**使用**简体中文**。
+- 若采用 Conventional Commits 风格，类型前缀使用英文（如 `feat:`、`fix:`、`docs:`、`refactor:`、`chore:`、`test:`），**冒号后的说明文字用中文**。
+- 标题行简洁；需要细节时在正文分段说明，仍用中文。
+
+示例：
+
+```
+feat: 为 YAML 工作流示例增加自定义 handler
+fix: 修正日志级别在并行任务下的重复输出
+docs: 补充 study_yaml_workflow 的运行说明
+```

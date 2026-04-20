@@ -45,7 +45,10 @@ tags
 .pytest_cache/
 .mypy_cache/
 .vscode/
-.cursor/
+# 仅共享 .cursor/rules/，其余 .cursor 仍忽略
+.cursor/**
+!.cursor/rules/
+!.cursor/rules/**
 
 *.swp
 
