@@ -11,6 +11,69 @@ qrun benchmarks/LightGBM/workflow_config_lightgbm_Alpha158.yaml
 
 ---
 
+## 零、先从架构视角理解这条工作流
+
+如果先不看细节，只看分层，可以把这条链路理解成 5 层：
+
+1. 配置层  
+   `yaml` 只负责声明“用什么组件、传什么参数”，本身不是执行逻辑。
+2. 数据源层  
+   `cn_data` 提供原始行情、交易日历、股票池、基准等底层数据。
+3. 特征与数据处理层  
+   `Alpha158`、`QlibDataLoader`、`DataHandlerLP` 把原始行情加工成机器学习样本。
+4. 模型层  
+   `DatasetH` 负责按时间切片，`LGBModel` 负责训练和预测。
+5. 评估与回测层  
+   `SignalRecord`、`SigAnaRecord`、`PortAnaRecord` 负责信号落盘、IC 分析和组合回测。
+
+对应到执行顺序，就是：
+
+```text
+YAML
+-> qlib.init
+-> Alpha158 / QlibDataLoader
+-> DataHandlerLP
+-> DatasetH
+-> LGBModel.fit / predict
+-> SignalRecord
+-> SigAnaRecord
+-> PortAnaRecord
+-> mlruns
+```
+
+把 `QlibDataLoader` 和 `DataHandlerLP` 放到这个 benchmark 的真实数据流里看，区别会更清楚。这里的底层数据源是 `~/.qlib/qlib_data/cn_data`。在这份二进制数据里，通常直接存的是 `$open`、`$high`、`$low`、`$close`、`$vwap`、`$volume` 这类基础行情序列，以及交易日历、股票池成分等元数据；一般并不会直接存好 `Alpha158` 因子列，更不会直接存一个叫 `LABEL0` 的训练标签列。
+
+在这条链路里，第一步接触 `cn_data` 的其实是 `QlibDataLoader`。例如，对 `SH600000` 在某个交易日 `T` 的样本，`QlibDataLoader` 会从 `cn_data` 里读取它前后若干天的基础字段，比如 `$close`、`$high`、`$low`、`$vwap`、`$volume`，然后按表达式现场计算出需要的列。若只做一个最小例子，可以把它理解成：
+
+```text
+输入：cn_data 里的 $close 原始序列
+表达式：["$close", "Ref($close, -2)/Ref($close, -1) - 1"]
+输出：一张 DataFrame，其中一列是特征，一列是 LABEL0
+```
+
+也就是说，`QlibDataLoader` 解决的是“从 `cn_data` 取哪些原料，并按公式拼成什么表”的问题。放到 `Alpha158` 里，就是把一批基础行情字段变成 158 个特征列，再额外生成默认标签 `LABEL0 = Ref($close, -2)/Ref($close, -1) - 1`。
+
+但到了模型训练阶段，只有这张原始表还不够。还需要继续回答几个问题：哪些样本只用于训练，哪些样本给推理用；标签为空的行怎么处理；标准化参数在什么时间段上拟合；训练时和预测时看到的是不是同一份处理结果。这一层就是 `DataHandlerLP` 在做的事。它内部会先调用一个 `data_loader` 拿到原始表，在这里通常就是接住 `QlibDataLoader` 的输出；然后继续按配置依次运行 `shared_processors`、`infer_processors`、`learn_processors`；最后在内存里维护三份数据：`raw`（原始数据，`self._data`）、`infer`（给预测/推理使用的数据，`self._infer`）、`learn`（给训练使用的数据，`self._learn`）。
+
+这里的 `raw` 容易和 `cn_data` 混淆。更准确地说，`cn_data` 是底层数据仓库，里面存的是 `$close`、`$volume` 这类基础行情序列；`raw` 则是已经经过 `QlibDataLoader` 取数和表达式展开之后的原始样本表。也就是说，相对 `cn_data` 而言，`raw` 已经不是“最底层原始数据”了，因为它已经把底层字段组织成了当前任务要用的 feature/label 表；但相对 `DataHandlerLP` 的 processor 流程而言，`raw` 仍然是“未处理表”，因为它还没有经过 `shared_processors`、`infer_processors`、`learn_processors` 这三段加工。
+
+`shared_processors` 的作用是放那些训练和推理两边都必须一致执行的公共处理步骤；`infer_processors` 只作用在推理视图上，用来生成 `self._infer`；`learn_processors` 只作用在训练视图上，用来生成 `self._learn`。因此，如果某一步处理在训练和预测时都应该一致，例如某些公共清洗或统一格式整理，可以放进 `shared_processors`；如果某一步只适合训练阶段，例如去掉标签为空的样本 `DropnaLabel`，就应该放进 `learn_processors`，而不应影响推理侧数据。以当前 `Alpha158` 配置为例，它内部默认会在 `learn_processors` 里执行 `DropnaLabel` 和对标签做 `CSZScoreNorm`；如果你额外配置了 `infer_processors`，那么给模型预测用的数据还会再经过对应的推理侧处理流程。
+
+所以，用 `cn_data` 的实际处理路径来概括就是：`QlibDataLoader` 负责“从 `cn_data` 拿基础行情并按表达式生成因子/标签列”，`DataHandlerLP` 负责“把这些列继续加工成训练和推理真正要消费的数据视图”。而 benchmark YAML 里直接写的 `Alpha158`，本质上就是把这两步提前封装好了：它先在内部组装 `QlibDataLoader`，再继承 `DataHandlerLP` 接管后续 processor 和数据分发流程。
+
+如果用更口语的方式理解：
+
+- `cn_data` 是原材料仓库
+- `Alpha158` 是特征加工车间
+- `DatasetH` 是按时间分拣样本
+- `LGBModel` 是学习“如何给股票打分”
+- `SigAnaRecord` 是检查“分高的股票后来是不是更强”
+- `PortAnaRecord` 是把分数真的放进策略里做模拟交易
+
+带着这个全局图，再往下看每个阶段的输入、处理中间态和输出，会更容易对齐源码。
+
+---
+
 ## 一、流程总览（先见森林）
 
 | 阶段 | 做什么 | 数据上发生了什么 |
@@ -172,11 +235,13 @@ valid: [2015-01-01, 2016-12-31]
 test:  [2017-01-01, 2020-08-01]
 ```
 
+这里的 `train / valid / test` 是 **机器学习样本切分**，用于控制哪些日期的数据进入训练、验证和样本外预测；它与 `port_analysis_config.backtest.start_time / end_time` 这类 **交易回测区间** 不是同一个概念，后者控制的是拿已经生成好的预测信号去做模拟交易的日期范围。
+
 **输出（逻辑形态）**
 
 - **train**：仅落在训练段日期范围内、且属于股票池的样本，用于 `LGBModel.fit` 的主要拟合。
-- **valid**：验证段样本，是否参与拟合取决于 `LGBModel` 实现（LightGBM 常可用验证集做 early stopping；以当前 contrib 实现为准）。
-- **test**：测试段样本，**不参与训练**，仅用于 `predict` 与后续分析/回测。
+- **valid**：验证段样本，是否参与拟合取决于 `LGBModel` 实现；LightGBM 这类模型通常会用它做 early stopping、调参与模型选择，因此它服务于训练过程控制，而不是作为最终效果汇报的主区间。
+- **test**：测试段样本，**不参与训练**，主要用于生成样本外 `predict` 结果、计算 IC/Rank IC，并作为后续 `PortAnaRecord` 回测的信号输入来源；常见配置下回测区间会直接落在 `test` 段内或与之相同，若把 `backtest.start_time / end_time` 设得更短，则等于只回测 `test` 段中的一个子区间。
 
 **举例**
 
