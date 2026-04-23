@@ -124,7 +124,7 @@ flowchart LR
     SAR -->|IC / RankIC / long-short分析| REC
 
     REC --> PAR[PortAnaRecord]
-    PAR -->|读取 pred.pkl 并填充 <PRED>| ST[Strategy]
+    PAR -->|"读取 pred.pkl 并填充 <PRED>"| ST[Strategy]
     PAR --> EX[Executor]
     PAR --> BT[Backtest Config]
 
@@ -173,7 +173,7 @@ flowchart TD
 ```mermaid
 flowchart TD
     A[Recorder] -->|load pred.pkl| B[PortAnaRecord]
-    B -->|fill <PRED>| C[Strategy Config]
+    B -->|"fill <PRED>"| C[Strategy Config]
     B --> D[Executor Config]
     B --> E[Backtest Config]
 
@@ -603,6 +603,127 @@ class Alpha158(DataHandlerLP):
 - 定义 label 表达式
 - 接入 loader
 - 产出 `raw / infer / learn` 三种数据视图
+
+这里顺手把“`feature expression` 到底在哪里定义”说透。
+
+- 在**使用层**，它通常表现为字符串，比如 `"$close"`、`"Ref($close, 5)"`、`"Mean($close, 20)/$close"`。
+- 在**源码层**，它对应的是表达式对象体系，基类在 [base.py](/abs/path/E:/code/qlib/qlib/data/base.py:10)：
+  - `Expression`：表达式基类
+  - `Feature`：基础字段，如 `$close`、`$open`
+  - `ExpressionOps`：算子基类，如 `Ref`、`Mean`、`Std`
+- 在**解析层**，字符串不是直接执行的，而是先经过 [parse_field](/abs/path/E:/code/qlib/qlib/utils/__init__.py:277) 改写：
+  - `"$close"` -> `Feature("close")`
+  - `"Ref($close, 5)"` -> `Operators.Ref(Feature("close"), 5)`
+- 在**实例化层**，`ExpressionProvider.get_expression_instance()` 会做 `eval(parse_field(field))`，位置在 [data.py](/abs/path/E:/code/qlib/qlib/data/data.py:392)。
+- 在**算子定义层**，`Ref`、`Mean`、`Std`、`Corr`、`Rank` 等都定义在 [ops.py](/abs/path/E:/code/qlib/qlib/data/ops.py:1)。
+
+所以，日常说“定义 feature 表达式”，通常有三种落点：
+
+1. **直接写在配置里**：最常见，适合 YAML / workflow 配置。
+2. **在 Python 脚本里生成表达式列表**：适合批量生成很多列，官方 `Alpha158` / `Alpha360` 大多是这么做的。
+3. **写自定义算子类**：当内置 `Ref/Mean/Std/...` 不够用时，才需要这样做。
+
+先看最直接的“配置文件方式”。仓库里现成例子是 [workflow_config_lightgbm_configurable_dataset.yaml](/abs/path/E:/code/qlib/examples/benchmarks/LightGBM/workflow_config_lightgbm_configurable_dataset.yaml:1)：
+
+```yaml
+data_loader:
+  class: QlibDataLoader
+  kwargs:
+    config:
+      feature:
+        - ["Resi($close, 15)/$close", "Rsquare($close, 5)", "($high-$low)/$open"]
+        - ["RESI5", "RSQR5", "KLEN"]
+      label:
+        - ["Ref($close, -2)/Ref($close, -1) - 1"]
+        - ["LABEL0"]
+```
+
+这里的含义不是“一个 dict 里塞一堆列”，而是两组并行列表：
+
+- 第一组是表达式列表 `exprs`
+- 第二组是列名列表 `names`
+- 它们按位置一一对应
+
+也就是：
+
+```python
+feature = (
+    ["表达式1", "表达式2", "表达式3"],
+    ["列名1",   "列名2",   "列名3"],
+)
+```
+
+再看“脚本方式”。这在表达式很长、或者你想复用中间结果时更清楚。`docs/start/getdata.rst` 里给了最直接的例子：
+
+```python
+from qlib.data import D
+from qlib.data.ops import *
+
+f1 = Feature("high") / Feature("close")
+f2 = Feature("open") / Feature("close")
+f3 = f1 + f2
+f4 = f3 * f3 / f3
+
+data = D.features(["sh600519"], [f4], start_time="20200101")
+```
+
+这个例子说明：表达式不一定非得写成字符串；它也可以先在 Python 里拼成 `Expression` 对象，再交给 `D.features(...)`。
+
+官方 `Alpha158` 更常见的做法，是“**脚本里批量生成字符串表达式**”，而不是把 158 列手工写进 YAML。定义位置在 [qlib/contrib/data/loader.py](/abs/path/E:/code/qlib/qlib/contrib/data/loader.py:59) 的 `Alpha158DL.get_feature_config()`。例如：
+
+```python
+fields += ["Mean($close, %d)/$close" % d for d in windows]
+names += ["MA%d" % d for d in windows]
+```
+
+这段代码的意思是：真正的 feature expression 仍然是字符串，只不过这些字符串是由 Python 批量生成的。随后 `Alpha158` 在 [handler.py](/abs/path/E:/code/qlib/qlib/contrib/data/handler.py:98) 里把它们交给 `QlibDataLoader`：
+
+```python
+data_loader = {
+    "class": "QlibDataLoader",
+    "kwargs": {
+        "config": {
+            "feature": self.get_feature_config(),
+            "label": kwargs.pop("label", self.get_label_config()),
+        },
+    },
+}
+```
+
+所以你可以把职责分清：
+
+- `QlibDataLoader`：消费 `(exprs, names)` 去取数
+- `Alpha158` / `MyHandler`：决定 feature 和 label 用哪些表达式
+- `Alpha158DL.get_feature_config()`：批量生成表达式列表
+- 表达式引擎：把字符串解析成对象并实际计算
+
+如果你只是想“在 Alpha158 上加一列自定义因子”，最稳妥的方式通常不是改 YAML，而是继承 handler，在脚本里 append 一条表达式。仓库里现成例子是 [examples/study_yaml_workflow/mylib/handler.py](/abs/path/E:/code/qlib/examples/study_yaml_workflow/mylib/handler.py:16)：
+
+```python
+class StudyAlpha158(Alpha158):
+    def get_feature_config(self):
+        fields, names = Alpha158DL.get_feature_config(conf)
+        fields.append("Mean($close, 5) - Mean($close, 20)")
+        names.append("MA_TREND_5_20")
+        return fields, names
+```
+
+这个例子很适合作为经验规则：
+
+- 少量、固定表达式：直接放配置里，最直观
+- 大量、批量生成表达式：写在 Python 里，最省事
+- 在现有数据集基础上扩一两列：继承 `Alpha158`，重写 `get_feature_config()`
+
+最后补一句“什么时候必须写脚本类”。如果你不是新增一个表达式，而是新增一个**算子**，例如想支持 `MyOp($close, 10)` 这种语法，那就不能只改配置了，必须写 Python 类并注册到 `custom_ops`。相关入口在：
+
+- [config.py](/abs/path/E:/code/qlib/qlib/config.py:282) 的 `custom_ops`
+- [ops.py](/abs/path/E:/code/qlib/qlib/data/ops.py:1628) 的 `Operators.register(...)`
+- [examples/highfreq/workflow.py](/abs/path/E:/code/qlib/examples/highfreq/workflow.py:17) 的注册示例
+
+这一点要和“自定义 feature expression”区分开：
+
+- **改表达式内容**：通常改配置或改 `get_feature_config()`
+- **改表达式语法能力**：才需要写新的 `ExpressionOps` 子类
 
 `LABEL0` 的默认定义在 [get_label_config](/abs/path/E:/code/qlib/qlib/contrib/data/handler.py:151)：
 
