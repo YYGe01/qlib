@@ -136,6 +136,8 @@ class TopkDropoutStrategy(BaseSignalStrategy):
         self.forbid_all_trade_at_limit = forbid_all_trade_at_limit
 
     def generate_trade_decision(self, execute_result=None):
+        # TopkDropoutStrategy 把“预测分数”翻译成“具体买卖单”：
+        # 先按上一交易步拿到的 signal 排序，再决定卖哪些、买哪些、各买卖多少。
         # get the number of trading step finished, trade_step can be [0, 1, 2, ..., trade_len - 1]
         trade_step = self.trade_calendar.get_trade_step()
         trade_start_time, trade_end_time = self.trade_calendar.get_step_time(trade_step)
@@ -187,7 +189,7 @@ class TopkDropoutStrategy(BaseSignalStrategy):
                 return li
 
         current_temp: Position = copy.deepcopy(self.trade_position)
-        # generate order list for this adjust date
+        # 后面所有操作都围绕“调仓日”展开：先卖出计划淘汰的持仓，再用释放的现金买入新股票。
         sell_order_list = []
         buy_order_list = []
         # load score
@@ -260,8 +262,7 @@ class TopkDropoutStrategy(BaseSignalStrategy):
                     )
                     # update cash
                     cash += trade_val - trade_cost
-        # buy new stock
-        # note the current has been changed
+        # 卖单成交后重新计算可用现金，再等权分配到待买入股票上。
         # current_stock_list = current_temp.get_stock_list()
         value = cash * self.risk_degree / len(buy) if len(buy) > 0 else 0
 

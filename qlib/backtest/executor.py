@@ -258,7 +258,10 @@ class BaseExecutor:
         object
             trade decision
         """
-
+        # Executor.collect_data 是执行层的统一推进入口：
+        # 1. 可选地把决策暴露给上层/RL 环境
+        # 2. 调具体 executor 完成成交
+        # 3. 在 bar 结束时统一更新账户、指标和交易日历
         if self.track_data:
             yield trade_decision
 
@@ -408,6 +411,8 @@ class NestedExecutor(BaseExecutor):
         trade_decision: BaseTradeDecision,
         level: int = 0,
     ) -> Generator[Any, Any, Tuple[List[object], dict]]:
+        # NestedExecutor 用于“日频策略里再嵌分钟级执行”这类多层回测：
+        # 外层给一个较粗粒度的决策，内层在更高频率日历上把它拆开并逐步执行。
         execute_result = []
         inner_order_indicators = []
         decision_list = []
@@ -588,6 +593,8 @@ class SimulatorExecutor(BaseExecutor):
         return order_it
 
     def _collect_data(self, trade_decision: BaseTradeDecision, level: int = 0) -> Tuple[List[object], dict]:
+        # SimulatorExecutor 是最常见的原子执行器：
+        # 它把 strategy 产出的订单逐条送到 Exchange 撮合，并把成交结果写回账户。
         trade_start_time, _ = self.trade_calendar.get_step_time()
         execute_result: list = []
 

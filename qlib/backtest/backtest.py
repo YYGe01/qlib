@@ -79,19 +79,24 @@ def collect_data_loop(
     object
         trade decision
     """
+    # collect_data_loop 是回测内核：
+    # 每个 bar 上都会按 “策略生成决策 -> 执行器撮合执行 -> 账户/持仓更新” 的顺序推进一次。
     trade_executor.reset(start_time=start_time, end_time=end_time)
     trade_strategy.reset(level_infra=trade_executor.get_level_infra())
 
     with tqdm(total=trade_executor.trade_calendar.get_trade_len(), desc="backtest loop") as bar:
         _execute_result = None
         while not trade_executor.finished():
+            # 策略拿到上一步执行结果后，生成当前步应下的订单/交易决策。
             _trade_decision: BaseTradeDecision = trade_strategy.generate_trade_decision(_execute_result)
+            # 执行器负责把决策送入更底层执行逻辑，并回传成交结果给下一轮策略。
             _execute_result = yield from trade_executor.collect_data(_trade_decision, level=0)
             trade_strategy.post_exe_step(_execute_result)
             bar.update(1)
         trade_strategy.post_upper_level_exe_step()
 
     if return_value is not None:
+        # 回测结束后，统一从各层 executor/account 中回收组合指标和交易指标。
         all_executors = trade_executor.get_all_executors()
 
         portfolio_dict: PORT_METRIC = {}

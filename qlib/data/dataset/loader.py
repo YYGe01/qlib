@@ -208,6 +208,9 @@ class QlibDataLoader(DLWParser):
         end_time: Union[str, pd.Timestamp] = None,
         gp_name: str = None,
     ) -> pd.DataFrame:
+        # QlibDataLoader 是底层表达式取数桥接层：
+        # 它把 handler 配置里的特征/标签表达式，转成对 D.features 的实际查询。
+        # 调试字段缺失、表达式报错、频率不对时，这里通常是最先要看的地方。
         if instruments is None:
             warnings.warn("`instruments` is not set, will load all stocks")
             instruments = "all"
@@ -223,6 +226,7 @@ class QlibDataLoader(DLWParser):
         df = D.features(instruments, exprs, start_time, end_time, freq=freq, inst_processors=inst_processors)
         df.columns = names
         if self.swap_level:
+            # 上游很多模块默认期待索引顺序是 <datetime, instrument>，这里统一转换。
             df = df.swaplevel().sort_index()  # NOTE: if swaplevel, return <datetime, instrument>
         return df
 

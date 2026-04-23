@@ -81,6 +81,8 @@ class Order:
     BUY: ClassVar[OrderDir] = OrderDir.BUY
 
     def __post_init__(self) -> None:
+        # Order 是回测里最小的可执行单元。
+        # 用户/策略只负责填写“想买卖多少”，真正成交多少由回测撮合后回写到 `deal_amount`。
         if self.direction not in {Order.SELL, Order.BUY}:
             raise NotImplementedError("direction not supported, `Order.SELL` for sell, `Order.BUY` for buy")
         self.deal_amount = 0.0
@@ -332,6 +334,8 @@ class BaseTradeDecision(Generic[DecisionType]):
             2) TradeRange
 
         """
+        # TradeDecision 比 Order 更上层：
+        # 它表示“策略在这一 bar 想做什么”，内部可以承载订单列表，也可以带执行时间范围等约束。
         self.strategy = strategy
         self.start_time, self.end_time = strategy.trade_calendar.get_step_time()
         # upper strategy has no knowledge about the sub executor before `_init_sub_trading`
@@ -557,6 +561,8 @@ class TradeDecisionWO(BaseTradeDecision[Order]):
         trade_range: Union[Tuple[int, int], TradeRange, None] = None,
     ) -> None:
         super().__init__(strategy, trade_range=trade_range)
+        # TradeDecisionWO 是最常用的具体决策类型：
+        # WO = With Orders，表示这个决策里直接装的是订单列表。
         self.order_list = cast(List[Order], order_list)
         start, end = strategy.trade_calendar.get_step_time()
         for o in order_list:
@@ -567,6 +573,7 @@ class TradeDecisionWO(BaseTradeDecision[Order]):
                 o.end_time = end
 
     def get_decision(self) -> List[Order]:
+        # Executor 最终就是从这里把订单拿出来执行的。
         return self.order_list
 
     def __repr__(self) -> str:

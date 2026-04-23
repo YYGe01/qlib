@@ -34,6 +34,7 @@ class LGBModel(ModelFT, LightGBMFInt):
         assert "train" in dataset.segments
         for key in ["train", "valid"]:
             if key in dataset.segments:
+                # 训练时明确读取 learn 数据视图，因此会走 DataHandlerLP._learn 而不是 _infer。
                 df = dataset.prepare(key, col_set=["feature", "label"], data_key=DataHandlerLP.DK_L)
                 if df.empty:
                     raise ValueError("Empty data from dataset, please check your dataset config.")
@@ -64,6 +65,10 @@ class LGBModel(ModelFT, LightGBMFInt):
         reweighter=None,
         **kwargs,
     ):
+        # fit 的主流程很直接：
+        # 1. 从 dataset 取 train/valid
+        # 2. 转成 LightGBM Dataset
+        # 3. 训练并把每轮评估指标写入 Recorder
         if evals_result is None:
             evals_result = {}  # in case of unsafety of Python default values
         ds_l = self._prepare_data(dataset, reweighter)
@@ -92,6 +97,7 @@ class LGBModel(ModelFT, LightGBMFInt):
     def predict(self, dataset: DatasetH, segment: Union[Text, slice] = "test"):
         if self.model is None:
             raise ValueError("model is not fitted yet!")
+        # 预测时切换到 infer 数据视图，避免把只适用于训练阶段的处理误带到线上推理。
         x_test = dataset.prepare(segment, col_set="feature", data_key=DataHandlerLP.DK_I)
         return pd.Series(self.model.predict(x_test.values), index=x_test.index)
 

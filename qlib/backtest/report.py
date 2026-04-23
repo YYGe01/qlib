@@ -71,7 +71,8 @@ class PortfolioMetrics:
                 - Else, it represent end time of benchmark, by default None
 
         """
-
+        # PortfolioMetrics 保存的是“组合层时间序列”：
+        # 每个 bar 都会记录收益、成本、换手、账户总值、现金、基准收益等。
         self.init_vars()
         self.init_bench(freq=freq, benchmark_config=benchmark_config)
 
@@ -164,6 +165,7 @@ class PortfolioMetrics:
         stock_value: float | None = None,
         bench_value: float | None = None,
     ) -> None:
+        # 每走完一个 bar，Account 都会调用这里追加一行组合指标记录。
         # check data
         if None in [
             trade_start_time,
@@ -201,6 +203,7 @@ class PortfolioMetrics:
         # finish pm update in each step
 
     def generate_portfolio_metrics_dataframe(self) -> pd.DataFrame:
+        # 这是回测报告里最核心的一张表，PortAnaRecord 后续风险分析就建立在它之上。
         pm = pd.DataFrame()
         pm["account"] = pd.Series(self.accounts)
         pm["return"] = pd.Series(self.returns)
@@ -276,6 +279,8 @@ class Indicator:
     """
 
     def __init__(self, order_indicator_cls: Type[BaseOrderIndicator] = NumpyOrderIndicator) -> None:
+        # Indicator 保存的是“交易执行层”的指标，不同于 PortfolioMetrics 的组合层收益。
+        # 这里更关注订单成交率、成交价表现、PA、FFR 等执行质量。
         self.order_indicator_cls = order_indicator_cls
 
         # order indicator is metrics for a single order for a specific step
@@ -337,6 +342,7 @@ class Indicator:
         self.order_indicator.transfer(func, "ffr")
 
     def update_order_indicators(self, trade_info: List[Tuple[Order, float, float, float]]) -> None:
+        # 原子执行器会直接把逐笔成交结果灌到这里，生成订单级指标。
         self._update_order_trade_info(trade_info=trade_info)
         self._update_order_fulfill_rate()
 
@@ -648,4 +654,5 @@ class Indicator:
         return self.trade_indicator
 
     def generate_trade_indicators_dataframe(self) -> pd.DataFrame:
+        # 这里把逐步累计的交易指标历史整理成表，供回测分析和可视化使用。
         return pd.DataFrame.from_dict(self.trade_indicator_his, orient="index")

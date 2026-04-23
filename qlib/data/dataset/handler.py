@@ -187,8 +187,9 @@ class DataHandler(DataHandlerABC):
                 the processed data will be saved on disk, and handler will load the cached data from the disk directly
                 when we call `init` next time
         """
-        # Setup data.
-        # _data may be with multiple column index level. The outer level indicates the feature set name
+        # DataHandler.setup_data 只做“原始表加载”：
+        # 它不关心 train/valid/test，也不关心训练态/推理态处理，
+        # 只是把 DataLoader 返回的数据整理成统一的 MultiIndex DataFrame。
         with TimeInspector.logt("Loading data"):
             # make sure the fetch method is based on an index-sorted pd.DataFrame
             self._data = lazy_sort_index(self.data_loader.load(self.instruments, self.start_time, self.end_time))
@@ -574,26 +575,27 @@ class DataHandlerLP(DataHandler):
         with_fit : bool
             The input of the `fit` will be the output of the previous processor
         """
-        # shared data processors
-        # 1) assign
+        # 这里是 DataHandlerLP 的核心：
+        # 同一份原始数据会被拆成 `_infer` 和 `_learn` 两条处理链，
+        # 前者给 predict / backtest 用，后者给 fit 用。
+
+        # 先跑 shared_processors，作为 learn / infer 两条分支的共同输入。
         _shared_df = self._data
         if not self._is_proc_readonly(self.shared_processors):  # avoid modifying the original data
             _shared_df = _shared_df.copy()
-        # 2) process
         _shared_df = self._run_proc_l(_shared_df, self.shared_processors, with_fit=with_fit, check_for_infer=True)
 
-        # data for inference
-        # 1) assign
+        # `_infer` 是预测链路使用的数据，要求 processor 可用于线上/推理阶段。
         _infer_df = _shared_df
         if not self._is_proc_readonly(self.infer_processors):  # avoid modifying the original data
             _infer_df = _infer_df.copy()
-        # 2) process
         _infer_df = self._run_proc_l(_infer_df, self.infer_processors, with_fit=with_fit, check_for_infer=True)
 
         self._infer = _infer_df
 
-        # data for learning
-        # 1) assign
+        # `_learn` 是训练链路使用的数据。
+        # append 模式下会复用 `_infer` 的结果继续加工；
+        # independent 模式下则从 shared 输出重新走 learn_processors。
         if self.process_type == DataHandlerLP.PTYPE_I:
             _learn_df = _shared_df
         elif self.process_type == DataHandlerLP.PTYPE_A:
@@ -603,7 +605,6 @@ class DataHandlerLP(DataHandler):
             raise NotImplementedError(f"This type of input is not supported")
         if not self._is_proc_readonly(self.learn_processors):  # avoid modifying the original  data
             _learn_df = _learn_df.copy()
-        # 2) process
         _learn_df = self._run_proc_l(_learn_df, self.learn_processors, with_fit=with_fit, check_for_infer=False)
 
         self._learn = _learn_df
@@ -646,7 +647,8 @@ class DataHandlerLP(DataHandler):
                 the processed data will be saved on disk, and handler will load the cached data from the disk directly
                 when we call `init` next time
         """
-        # init raw data
+        # DataHandlerLP.setup_data 是“加载原始数据 + 拟合处理器 + 生成 learn/infer 结果”的总入口，
+        # 基本上 dataset 初始化时最重要的数据准备动作都从这里发生。
         super().setup_data(**kwargs)
 
         with TimeInspector.logt("fit & process data"):

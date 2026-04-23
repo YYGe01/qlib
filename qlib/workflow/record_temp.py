@@ -170,6 +170,8 @@ class SignalRecord(RecordTemp):
 
     @staticmethod
     def generate_label(dataset):
+        # 这里尝试额外把 test 段原始 label 一起存下来。
+        # 后面的 SigAnaRecord / PortAnaRecord 都优先复用这个结果，避免再次拼装标签。
         with class_casting(dataset, DatasetH):
             params = dict(segments="test", col_set="label", data_key=DataHandlerLP.DK_R)
             try:
@@ -188,7 +190,8 @@ class SignalRecord(RecordTemp):
         return raw_label
 
     def generate(self, **kwargs):
-        # generate prediction
+        # SignalRecord 是“训练完成 -> 下游分析开始”之间的桥梁：
+        # 它把 model.predict 的结果标准化后固化为 pred.pkl，作为后续所有分析步骤的输入。
         pred = self.model.predict(self.dataset)
         if isinstance(pred, pd.Series):
             pred = pred.to_frame("score")
@@ -465,12 +468,14 @@ class PortAnaRecord(ACRecordTemp):
     def _generate(self, **kwargs):
         pred = self.load("pred.pkl")
 
-        # replace the "<PRED>" with prediction saved before
+        # 回测配置里常把 signal 写成 "<PRED>" 占位符；
+        # 这里会把它替换成当前 Recorder 中刚生成的预测结果。
         placeholder_value = {"<PRED>": pred}
         for k in "executor_config", "strategy_config":
             setattr(self, k, fill_placeholder(getattr(self, k), placeholder_value))
 
-        # if the backtesting time range is not set, it will automatically extract time range from the prediction file
+        # 如果没显式给回测区间，就从预测文件的时间索引反推。
+        # 这是很多示例脚本能“训练完直接回测”的关键衔接逻辑。
         dt_values = pred.index.get_level_values("datetime")
         if self.backtest_config["start_time"] is None:
             self.backtest_config["start_time"] = dt_values.min()
@@ -484,7 +489,7 @@ class PortAnaRecord(ACRecordTemp):
             )
 
         artifact_objects = {}
-        # custom strategy and get backtest
+        # 这里正式进入回测引擎，产出各频率的收益曲线、持仓明细和交易指标。
         portfolio_metric_dict, indicator_dict = normal_backtest(
             executor=self.executor_config, strategy=self.strategy_config, **self.backtest_config
         )

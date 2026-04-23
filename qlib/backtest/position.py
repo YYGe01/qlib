@@ -260,6 +260,7 @@ class Position(BasePosition):
             if there is no price key in the dict of stocks, it will be filled by _fill_stock_value.
             by default {}.
         """
+        # Position 负责维护“当前账户里到底持有哪些股票、多少股、最新价格、现金还剩多少”。
         super().__init__()
 
         # NOTE: The position dict must be copied!!!
@@ -340,6 +341,7 @@ class Position(BasePosition):
         self.position[stock_id]["weight"] = 0  # update the weight in the end of the trade date
 
     def _buy_stock(self, stock_id: str, trade_val: float, cost: float, trade_price: float) -> None:
+        # 买入会增加持仓数量，同时把成交金额和费用从现金里扣掉。
         trade_amount = trade_val / trade_price
         if stock_id not in self.position:
             self._init_stock(stock_id=stock_id, amount=trade_amount, price=trade_price)
@@ -350,6 +352,7 @@ class Position(BasePosition):
         self.position["cash"] -= trade_val + cost
 
     def _sell_stock(self, stock_id: str, trade_val: float, cost: float, trade_price: float) -> None:
+        # 卖出会减少持仓数量，并把成交回款按结算规则加回现金或延迟现金。
         trade_amount = trade_val / trade_price
         if stock_id not in self.position:
             raise KeyError("{} not in current position".format(stock_id))
@@ -388,6 +391,7 @@ class Position(BasePosition):
         return stock_id in self.position
 
     def update_order(self, order: Order, trade_val: float, cost: float, trade_price: float) -> None:
+        # Position 只关心仓位本身，不关心收益指标；它的职责是把成交结果映射成最新仓位。
         # handle order, order is a order class, defined in exchange.py
         if order.direction == Order.BUY:
             # BUY
@@ -415,6 +419,7 @@ class Position(BasePosition):
         return value
 
     def calculate_value(self) -> float:
+        # 账户总资产 = 股票市值 + 可用现金 + 尚未结算但已确认的延迟现金。
         value = self.calculate_stock_value()
         value += self.position["cash"] + self.position.get("cash_delay", 0.0)
         return value

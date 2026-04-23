@@ -32,6 +32,8 @@ class Recorder:
 
     The status of the recorder can be SCHEDULED, RUNNING, FINISHED, FAILED.
     """
+    # Recorder 是 workflow 的“结果总线”：
+    # 模型、预测、分析、回测都会把中间产物和指标写到这里，后续步骤再从这里取。
 
     # status type
     STATUS_S = "SCHEDULED"
@@ -333,6 +335,8 @@ class MLflowRecorder(Recorder):
             )
 
     def start_run(self):
+        # 启动 run 时除了打开 mlflow，还会顺手记录命令行、环境变量和未提交代码差异，
+        # 方便后续复现实验。
         # set the tracking uri
         mlflow.set_tracking_uri(self.uri)
         # start the run
@@ -396,6 +400,9 @@ class MLflowRecorder(Recorder):
 
     def save_objects(self, local_path=None, artifact_path=None, **kwargs):
         assert self.uri is not None, "Please start the experiment and recorder first before using recorder directly."
+        # 这里统一支持两种写法：
+        # 1. 直接上传现成文件/目录
+        # 2. 传 Python 对象，由 qlib 先序列化再作为 artifact 保存
         if local_path is not None:
             path = Path(local_path)
             if path.is_dir():
@@ -426,7 +433,7 @@ class MLflowRecorder(Recorder):
             object: the saved object in mlflow.
         """
         assert self.uri is not None, "Please start the experiment and recorder first before using recorder directly."
-
+        # 下游模块基本都通过这个接口取 `pred.pkl`、`label.pkl`、`trained_model` 等中间产物。
         path = None
         try:
             path = self.client.download_artifacts(self.id, name)

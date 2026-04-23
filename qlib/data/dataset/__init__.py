@@ -182,6 +182,9 @@ class DatasetH(Dataset):
         else:
             return self.handler.fetch(slc, **kwargs)
 
+    # DatasetH.prepare 是“数据集视角”的统一取数入口：
+    # 外部只关心 train/valid/test 这样的逻辑分段，
+    # 真正的数据加载、预处理和列裁剪都继续下沉到 handler.fetch 中完成。
     def prepare(
         self,
         segments: Union[List[Text], Tuple[Text], Text, slice, pd.Index],
@@ -234,16 +237,15 @@ class DatasetH(Dataset):
         # To resolve the confliction
         # - The segment name will have higher priorities
 
-        # 1) Use it as segment name first
-        # 1.1) directly fetch split like "train" "valid" "test"
+        # 先把传入参数解释为逻辑分段名；这是训练和预测最常见的调用方式。
         if isinstance(segments, str) and segments in self.segments:
             return self._prepare_seg(self.segments[segments], **seg_kwargs)
 
-        # 1.2) fetch multiple splits like ["train", "valid"] ["train", "valid", "test"]
+        # 也支持一次取多个分段，典型场景是模型同时拿到 train/valid。
         if isinstance(segments, (list, tuple)) and all(seg in self.segments for seg in segments):
             return [self._prepare_seg(self.segments[seg], **seg_kwargs) for seg in segments]
 
-        # 2) Use pass it directly to prepare a single seg
+        # 如果不是分段名，就把它当成底层 selector 直接传给 handler。
         return self._prepare_seg(segments, **seg_kwargs)
 
     # helper functions

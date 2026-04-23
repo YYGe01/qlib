@@ -184,6 +184,9 @@ def get_strategy_executor(
     exchange_kwargs: dict = {},
     pos_type: str = "Position",
 ) -> Tuple[BaseStrategy, BaseExecutor]:
+    # 回测前的装配动作都在这里完成：
+    # 账户(Account)、交易所(Exchange)、策略(Strategy)、执行器(Executor)
+    # 会先共享同一套基础设施，再交给 backtest_loop 驱动。
     # NOTE:
     # - for avoiding recursive import
     # - typing annotations is not reliable
@@ -263,6 +266,7 @@ def backtest(
         It is organized in a dict format
 
     """
+    # 这是外部最常调用的统一回测入口；真正的逐步撮合循环在 backtest_loop。
     trade_strategy, trade_executor = get_strategy_executor(
         start_time,
         end_time,

@@ -126,8 +126,10 @@ class Exchange:
                                                 this target on this day).
                                                 limit_buy will be set to False by default (False indicates we can buy
                                                 this target on this day).
-                                    index: MultipleIndex(instrument, pd.Datetime)
+                                            index: MultipleIndex(instrument, pd.Datetime)
         """
+        # Exchange 是回测里的“市场撮合层”：
+        # 它统一负责准备报价、涨跌停/停牌限制、成交价、手续费、成交量约束等交易规则。
         self.freq = freq
         self.start_time = start_time
         self.end_time = end_time
@@ -199,6 +201,7 @@ class Exchange:
         self.quote: BaseQuote = self.quote_cls(self.quote_df, freq)
 
     def get_quote_from_qlib(self) -> None:
+        # 回测所需的行情字段最终都在这里一次性从底层数据源取齐。
         # get stock data from qlib
         if len(self.codes) == 0:
             self.codes = D.instruments()
@@ -408,6 +411,7 @@ class Exchange:
         end_time: pd.Timestamp,
         direction: int | None = None,
     ) -> bool:
+        # “能不能交易”是停牌检查和涨跌停检查的合并结果。
         # check if stock can be traded
         return not (
             self.check_stock_suspended(stock_id, start_time, end_time)
@@ -434,6 +438,8 @@ class Exchange:
         :param dealt_order_amount: the dealt order amount dict with the format of {stock_id: float}
         :return: trade_val, trade_cost, trade_price
         """
+        # deal_order 是订单真正“落地成交”的核心入口：
+        # 先检查是否允许交易，再计算成交价格/数量/费用，最后把结果写回账户或持仓。
         # check order first.
         if not self.check_order(order):
             order.deal_amount = 0.0
@@ -499,6 +505,7 @@ class Exchange:
         direction: OrderDir,
         method: Optional[str] = "ts_data_last",
     ) -> Union[None, int, float, bool, IndexData]:
+        # 买卖可以配置不同价格字段；若字段异常，则回退到 close，避免整条回测直接中断。
         if direction == OrderDir.SELL:
             pstr = self.sell_price
         elif direction == OrderDir.BUY:

@@ -33,6 +33,9 @@ def get_group_columns(df: pd.DataFrame, group: Union[Text, None]):
 
 
 class Processor(Serializable):
+    # Processor 是 DataHandlerLP 处理链里的最小处理单元：
+    # `fit` 学习统计量，`__call__` 真正改数据。
+    # 调试数据分布异常、样本被删、特征被标准化错位时，通常都要回到这里往下看。
     def fit(self, df: pd.DataFrame = None):
         """
         learn data processing parameters
@@ -107,6 +110,7 @@ class DropnaLabel(DropnaProcessor):
         super().__init__(fields_group=fields_group)
 
     def is_for_infer(self) -> bool:
+        # 这个处理器会根据标签删样本，因此只能用于训练链，不能进入 infer_processors。
         """The samples are dropped according to label. So it is not usable for inference"""
         return False
 
@@ -202,6 +206,8 @@ class MinMaxNorm(Processor):
         self.fields_group = fields_group
 
     def fit(self, df: pd.DataFrame = None):
+        # 归一化参数只允许在训练窗口内拟合；
+        # 如果 fit_end_time 穿透到了测试区间，就会产生典型的数据泄漏。
         df = fetch_df_by_index(df, slice(self.fit_start_time, self.fit_end_time), level="datetime")
         cols = get_group_columns(df, self.fields_group)
         self.min_val = np.nanmin(df[cols].values, axis=0)
@@ -236,6 +242,7 @@ class ZScoreNorm(Processor):
         self.fields_group = fields_group
 
     def fit(self, df: pd.DataFrame = None):
+        # 这里学习均值/方差，后续 train/valid/test 都会复用这组统计量。
         df = fetch_df_by_index(df, slice(self.fit_start_time, self.fit_end_time), level="datetime")
         cols = get_group_columns(df, self.fields_group)
         self.mean_train = np.nanmean(df[cols].values, axis=0)
@@ -310,6 +317,8 @@ class CSZScoreNorm(Processor):
             raise NotImplementedError(f"This type of input is not supported")
 
     def __call__(self, df):
+        # 截面标准化按“同一天不同股票”分组处理，
+        # 它和时序标准化最大的区别是：每个交易日内部都会重新归一化。
         # try not modify original dataframe
         if not isinstance(self.fields_group, list):
             self.fields_group = [self.fields_group]
@@ -350,6 +359,7 @@ class CSRankNorm(Processor):
         self.fields_group = fields_group
 
     def __call__(self, df):
+        # 先做按日截面排名，再把均匀分布映射到近似标准正态尺度。
         # try not modify original dataframe
         cols = get_group_columns(df, self.fields_group)
         t = df[cols].groupby("datetime", group_keys=False).rank(pct=True)

@@ -102,7 +102,7 @@ class Account:
             if there is no price key in the dict of stocks, it will be filled by _fill_stock_value.
             by default {}.
         """
-
+        # Account 负责把“成交结果”转换成“现金、持仓、收益、换手、指标”等状态。
         self._pos_type = pos_type
         self._port_metr_enabled = port_metr_enabled
         self.benchmark_config: dict = {}  # avoid no attribute error
@@ -201,6 +201,8 @@ class Account:
                 self.accum_info.add_return_value(profit)  # note here do not consider cost
 
     def update_order(self, order: Order, trade_val: float, cost: float, trade_price: float) -> None:
+        # 每笔成交都会先更新 position，再同步更新 account 侧累计收益/成本/换手。
+        # 买卖方向不同，更新顺序也不同，因为仓位里是否已有该股票会影响计算。
         if self.current_position.skip_update():
             # TODO: supporting polymorphism for account
             # updating order for infinite position is meaningless
@@ -377,6 +379,10 @@ class Account:
         indicator_config : dict, optional
             config of calculating indicators, by default {}
         """
+        # 每个 bar 结束时，Account 会做三件事：
+        # 1. 用收盘价刷新持仓状态
+        # 2. 结算组合层收益/持仓快照
+        # 3. 汇总本 bar 的交易指标
         if atomic is True and trade_info is None:
             raise ValueError("trade_info is necessary in atomic executor")
         elif atomic is False and inner_order_indicators is None:

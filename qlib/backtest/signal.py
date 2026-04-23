@@ -55,9 +55,12 @@ class SignalWCache(Signal):
                            2008-01-07  0.505539
                            2008-01-08  0.395004
         """
+        # SignalWCache 把“已经准备好的预测结果”缓存起来，
+        # 策略每走一步时再按当前时间窗切一份可交易信号出来。
         self.signal_cache = convert_index_format(signal, level="datetime")
 
     def get_signal(self, start_time: pd.Timestamp, end_time: pd.Timestamp) -> Union[pd.Series, pd.DataFrame]:
+        # 信号频率和策略决策频率不一定一致，所以这里会做一次按时间窗重采样。
         # the frequency of the signal may not align with the decision frequency of strategy
         # so resampling from the data is necessary
         # the latest signal leverage more recent data and therefore is used in trading.
@@ -67,6 +70,8 @@ class SignalWCache(Signal):
 
 class ModelSignal(SignalWCache):
     def __init__(self, model: BaseModel, dataset: Dataset) -> None:
+        # 这是最常见的桥接方式：直接把 (model, dataset) 包成 signal。
+        # 回测策略拿到它后，不需要关心预测过程本身，只管按日期取分数。
         self.model = model
         self.dataset = dataset
         pred_scores = self.model.predict(dataset)
@@ -93,6 +98,8 @@ def create_signal_from(
     This method will choose the right method to create a signal based on `obj`
     Please refer to the code below.
     """
+    # create_signal_from 让策略层支持多种 signal 来源：
+    # 既可以直接传预测表，也可以传 (model, dataset)，还可以传实例化配置。
     if isinstance(obj, Signal):
         return obj
     elif isinstance(obj, (tuple, list)):
