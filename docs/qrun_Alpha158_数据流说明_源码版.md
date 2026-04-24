@@ -1375,6 +1375,122 @@ class MyModel(Model):
 只要 fit/predict 接口对了，哪怕根本不是“真训练模型”，也能接进整条 qrun 工作流
 ```
 
+### 4.2.1 如果不需要模型：哪些需要，哪些不需要
+
+这里先把“不需要模型”拆成两种常见情况，否则很容易把“不要训练”误解成“整条后半段都不要了”。
+
+第一种是：
+
+```text
+你不要机器学习训练，
+但仍然要生成一个分数序列，再做 IC 分析或回测。
+```
+
+比如：
+
+- 直接用某个因子列当 `score`
+- 多个因子做手工加权打分
+- 用规则打分，而不是 `fit()` 出一个参数化模型
+
+这种情况下，**数据层通常仍然需要保留**：
+
+- `qlib.init`
+- `cn_data`
+- `QlibDataLoader`
+- `Alpha158` / `DataHandlerLP`
+- `DatasetH`
+
+原因很简单：即使你不训练，通常仍然要先把：
+
+```text
+原始行情 -> 特征表 -> 按时间段切片
+```
+
+这条链跑出来。
+
+但**训练专属模块通常就不需要了**：
+
+- `trainer.py` 里的训练主流程
+- `LGBModel.fit`
+- `train/valid` 这两段专门为监督学习准备的数据
+- `learn_processors` 里那些只服务训练标签清洗的部分
+
+如果你的打分逻辑只是“从 `feature` 直接算一个分数”，那么概念上的最小链可以写成：
+
+```text
+QlibDataLoader
+-> Alpha158(DataHandlerLP)
+-> DatasetH
+-> MyRuleScoreModel(只实现 predict，甚至 fit 为空)
+-> SignalRecord
+-> SigAnaRecord（可选）
+-> PortAnaRecord（可选）
+-> Strategy + Executor（如果要回测）
+```
+
+这里的 `MyRuleScoreModel` 本质上更像一个“分数适配器”，而不是训练模型。它的作用只是把：
+
+```text
+dataset.prepare(..., col_set="feature", data_key=DK_I)
+```
+
+拿出来，再转换成一列 `score`，以便复用后面的 `SignalRecord / PortAnaRecord`。
+
+第二种是：
+
+```text
+你既不要训练，
+也不要 IC 分析，
+甚至连 pred.pkl 这套记录链都不想走，
+只是想拿到 Alpha158 特征表自己使用。
+```
+
+这种情况下，真正需要保留的通常只剩：
+
+- `qlib.init`
+- `cn_data`
+- `QlibDataLoader`
+- `Alpha158` / `DataHandlerLP`
+- `DatasetH`
+
+而下面这些通常都可以不走：
+
+- `Model`
+- `SignalRecord`
+- `SigAnaRecord`
+- `PortAnaRecord`
+- `Strategy`
+- `Executor`
+
+此时最小链就退化成：
+
+```text
+cn_data
+-> QlibDataLoader
+-> Alpha158(DataHandlerLP)
+-> DatasetH.prepare(...)
+-> 直接拿 DataFrame
+```
+
+如果再说得更落地一点：
+
+- 你只想要 `Alpha158` 的特征矩阵：保留数据层，后面模型层和分析层都不要
+- 你想用“规则分数”替代训练模型，并继续做 IC / 回测：保留数据层 + `predict` 输出接口 + record / strategy / executor
+- 你想做回测，但信号根本不是从 `DatasetH` 来的，而是外部已经算好的分数表：连 `Alpha158` / `DatasetH` 都可以不保留，直接让 `PortAnaRecord` 或回测入口吃现成 `signal`
+
+所以判断时最实用的原则不是“有没有模型”这一句，而是先问三个问题：
+
+1. 你还需不需要 `Alpha158` 这套特征生成？
+2. 你还需不需要一张 `(datetime, instrument) -> score` 的信号表？
+3. 你还需不需要 IC 分析或回测？
+
+对应到模块裁剪上，可以直接记成：
+
+- 只要特征表：保留 `Loader + Handler + Dataset`
+- 只要分数表：再补一个轻量 `Model/predict` 适配层，`fit` 可为空
+- 只要回测：保留 `signal -> Strategy -> Executor -> backtest`
+- 不做训练：`LGBModel.fit`、训练器、`train/valid`、大部分训练专属处理都可以去掉
+
 贯穿示例里的 `MyModel.predict(...)` 也最好保持这个输出：
 
 ```text
@@ -2244,6 +2360,37 @@ MyLoader
 
 这也是为什么 Qlib 的这套工作流适合做“配置驱动的节点替换”。
 
+如果换成“无模型”场景，再把链压缩一次，会更容易判断哪些能删：
+
+只取 Alpha158 特征，不做训练、不做回测：
+
+```text
+QlibDataLoader
+-> Alpha158(DataHandlerLP)
+-> DatasetH
+-> prepare(...)
+```
+
+不用训练，但要产出分数并继续分析/回测：
+
+```text
+QlibDataLoader
+-> Alpha158(DataHandlerLP)
+-> DatasetH
+-> RuleScoreModel(只做 predict)
+-> SignalRecord
+-> SigAnaRecord / PortAnaRecord
+```
+
+直接拿外部分数做回测：
+
+```text
+external signal
+-> Strategy
+-> Executor
+-> backtest
+```
+
 ---
 
 ## 七、最后只记住这几个判断就够了
@@ -2255,6 +2402,7 @@ MyLoader
 - 想改“训练后多输出什么分析”，看 `RecordTemp`
 - 想改“怎么从分数变成调仓”，看 `BaseSignalStrategy`
 - 想改“怎么撮合成交”，看 `BaseExecutor`
+- 不做模型训练时，先判断你要保留的是“特征表”、“分数表”，还是“回测链”
 
 如果你顺着源码读，推荐顺序仍然是：
 
