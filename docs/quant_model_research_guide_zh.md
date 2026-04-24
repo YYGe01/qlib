@@ -1067,3 +1067,439 @@ LightGBM 基线
 
 能满足这些条件的策略，才有继续深入研究的价值。
 
+## 13. 给 NLP/LLM 工程师的高阶路线：快速找准方向
+
+如果你的背景是 NLP/LLM 工程师，已经熟悉机器学习、深度学习、Qlib 代码结构，也跑过 LightGBM，那么你不需要再按“小白路线”慢慢走。你现在最适合做的是：把量化研究当成一个可自动化、可并行验证、可快速淘汰假设的研发系统。
+
+核心目标不是“换一个更强模型”，而是尽快回答：
+
+```text
+在这个市场、这个数据频率、这个交易约束下，
+什么信息源 + 什么建模假设 + 什么组合约束，
+能稳定带来交易成本后的样本外增量？
+```
+
+### 13.1 你的最优起点
+
+你现在应该从三个动作开始：
+
+1. 固化一个强评测基准。
+2. 做一个自动实验流水线。
+3. 只研究能产生“增量信息”的方向。
+
+不要再花太多时间横向尝试一堆模型名。你已经能很快掌握模型，所以真正稀缺的是：评测协议、数据假设、研究方向筛选。
+
+### 13.2 第一优先级：先搭研究飞轮
+
+用 3-5 天搭一个小型 research flywheel，后面所有想法都进入同一套评测。
+
+你需要固定这些东西：
+
+| 模块 | 固定内容 | 原因 |
+|---|---|---|
+| 数据切分 | train / valid / test / rolling test | 防止每个实验口径不同 |
+| 股票池 | CSI300、CSI500 至少一个主池一个外推池 | 检查泛化 |
+| 交易设置 | 成本、涨跌停、停牌、成交价、topk、n_drop | 防止回测收益不可比 |
+| 模型基线 | LightGBM、DoubleEnsemble、GRU/TCN、TRA 或 HIST | 覆盖表格、时序、动态、关系 |
+| 指标 | IC、Rank IC、ICIR、Rank ICIR、年化、IR、MDD、换手 | 预测和交易都要看 |
+| 实验记录 | config hash、数据版本、seed、模型参数、结果表 | 方便自动对比 |
+
+建议你做一个统一命令：
+
+```text
+run_exp(config) -> train -> predict -> backtest -> collect_metrics -> markdown/html report
+```
+
+这一步的价值非常大。你有 LLM 工程能力，可以让大模型帮你生成配置、改模型、总结结果，但所有结果必须回到同一个 leaderboard。没有统一 leaderboard，AI 生成再多想法也只是噪声。
+
+### 13.3 最值得你优先攻的四条研究线
+
+我建议你并行开四条线，但每条线都只做最小可行实验，2 周内淘汰没有增量的方向。
+
+#### 方向 A：动态市场适应，这是最高优先级
+
+推荐程度：最高。
+
+原因：
+
+金融市场最核心的问题是非平稳。你换模型很容易，但真正能拉开差距的是让模型知道“什么时候该信什么因子/什么模式”。
+
+从当前项目出发，优先研究：
+
+```text
+LightGBM baseline
+  -> rolling retraining
+  -> DoubleEnsemble
+  -> TRA / AdaRNN / DDG-DA
+  -> regime-aware ensemble
+```
+
+你可以做一个更工程化的版本：
+
+```text
+多个专家模型：
+  - LightGBM_短窗口
+  - LightGBM_长窗口
+  - DoubleEnsemble
+  - GRU/TCN
+  - 行业中性模型
+  - 高频/低频特征模型
+
+路由器：
+  - 市场波动率
+  - 成交额变化
+  - 指数趋势
+  - 行业扩散度
+  - 最近 IC 衰减
+  - 最近回撤
+
+输出：
+  - 动态加权后的股票 score
+```
+
+这相当于做一个轻量版 `TRA + online model selection`，但不一定一开始就端到端深度训练。先用规则或 LightGBM 做 gating，验证是否有增量。
+
+关键实验：
+
+- 固定模型 vs rolling 模型。
+- 单一模型 vs 多专家动态加权。
+- 最近 20/60/120 天 IC 作为权重信号是否有效。
+- 牛市、熊市、震荡市分别表现。
+- CSI300 上调参，CSI500 上外推。
+
+判断标准：
+
+```text
+Rank ICIR 提升 > 5%-10%
+最大回撤不恶化
+换手不显著增加
+跨年份仍有效
+```
+
+如果这个方向有效，它比单纯引入新 backbone 更接近实盘价值。
+
+#### 方向 B：LLM 文本/事件因子，这是你的差异化优势
+
+推荐程度：很高。
+
+你是 NLP/LLM 工程师，这条线是你的天然优势。但不要一开始训练金融大模型，也不要直接问 LLM “股票会不会涨”。正确方式是把 LLM 用成结构化信息抽取器。
+
+最小可行实验：
+
+```text
+新闻/公告/研报标题
+  -> 股票实体链接
+  -> 发布时间对齐
+  -> LLM/FinBERT 抽取结构化事件
+  -> 每只股票每日聚合事件特征
+  -> 拼到 Alpha158/Alpha360
+  -> LightGBM / DoubleEnsemble 消融
+```
+
+优先抽这些字段：
+
+| 字段 | 例子 | 为什么有用 |
+|---|---|---|
+| sentiment | positive / neutral / negative | 基础情绪 |
+| event_type | earnings、guidance、policy、lawsuit、M&A、buyback | 不同事件影响不同 |
+| surprise | 超预期、符合预期、低于预期 | 比纯情绪更重要 |
+| novelty | 是否重复新闻 | 避免重复计数 |
+| horizon | 短期冲击/中期基本面 | 决定预测窗口 |
+| affected_scope | 个股/行业/市场 | 区分个股 alpha 和 beta |
+| confidence | 模型置信度 | 低置信度特征降权 |
+
+强烈建议你做事件模板，而不是只做 embedding：
+
+```json
+{
+  "stock": "000001.SZ",
+  "publish_time": "2024-05-10 18:32:00",
+  "event_type": "earnings",
+  "sentiment": "positive",
+  "surprise": "above_expectation",
+  "affected_scope": "company",
+  "expected_horizon": "3-20 trading days",
+  "confidence": 0.82
+}
+```
+
+为什么不建议直接 embedding？
+
+因为 embedding 很容易变成黑箱，而且样本量不够时容易过拟合。结构化事件特征更容易做消融、分组、解释和排错。
+
+关键消融：
+
+- 无文本 baseline。
+- 只有新闻数量。
+- 只有情绪。
+- 情绪 + 事件类型。
+- 情绪 + 事件类型 + surprise。
+- LLM 事件特征 vs FinBERT 情绪。
+- 文本特征对大市值/小市值分别是否有效。
+- 文本特征对公告后 1/3/5/20 天 horizon 是否有效。
+
+判断标准：
+
+```text
+文本特征加入后：
+Rank IC 稳定提升
+低覆盖股票不恶化
+交易成本后收益提升
+事件发生日之后才生效，没有时间泄漏
+```
+
+如果这条线跑通，你可以进一步做：
+
+- 事件驱动子策略。
+- 文本因子和价格量因子的动态融合。
+- 行业新闻扩散到相关股票。
+- RAG + LLM 做公告/财报结构化解析。
+
+#### 方向 C：图关系 + 文本事件扩散，这是高上限方向
+
+推荐程度：高，但数据工程重。
+
+这条线适合你在方向 B 有基础后继续做。单个股票的新闻经常会影响同产业链、同行业、同概念股票，Qlib 里的 `HIST / IGMTF / GATs` 已经说明跨股票关系有研究价值。
+
+你可以把图关系分成三层：
+
+```text
+静态图：
+  - 行业
+  - 概念
+  - 指数成分
+
+半动态图：
+  - 供应链
+  - 新闻共现
+  - 基金共同持仓
+
+动态图：
+  - 收益相关性
+  - 成交额相关性
+  - 文本事件共振
+```
+
+推荐最小实验：
+
+```text
+行业/概念图
+  + LLM 事件特征
+  + LightGBM baseline
+  -> 生成“事件扩散特征”
+```
+
+例如：
+
+```text
+某公司出现 positive earnings event
+  -> 同行业股票获得 industry_event_positive_count
+  -> 供应链上游获得 upstream_event_score
+  -> 同概念股票获得 concept_event_heat
+```
+
+先不要急着上复杂 GNN。先用图聚合特征验证“关系是否有增量”：
+
+```text
+neighbor_mean_sentiment
+neighbor_event_count
+industry_event_heat
+concept_event_heat
+correlation_neighbor_return
+```
+
+如果这些简单图聚合特征有效，再上 HIST/GAT/Graph Transformer。
+
+判断标准：
+
+```text
+图聚合特征有效 -> 再做 GNN
+图聚合特征无效 -> 复杂 GNN 大概率只是过拟合
+```
+
+#### 方向 D：现代时间序列 backbone，用来替换 Qlib 旧模型
+
+推荐程度：中高。
+
+这条线技术上很适合你，但我建议排在动态市场和文本事件之后。原因是股票收益的瓶颈往往不是 backbone 不够强，而是数据噪声和非平稳。
+
+如果要做，优先引入这些现代基线：
+
+```text
+DLinear / NLinear
+PatchTST
+iTransformer
+TimesNet
+TSMixer
+ModernTCN
+Mamba/SSM 类时序模型
+```
+
+研究方式：
+
+```text
+先不要改策略链路
+只替换预测模型
+保持 Alpha360、label、backtest、TopkDropout 不变
+和 GRU/TCN/Transformer 做公平对比
+```
+
+重点不要只看 MSE，要看：
+
+- Rank IC。
+- ICIR。
+- 分组收益。
+- 换手。
+- 信号自相关。
+- 不同 lookback 下稳定性。
+- 训练成本和推理成本。
+
+如果你要做基础模型方向，建议定位为：
+
+```text
+时间序列预训练表征 + 下游截面排序
+```
+
+而不是：
+
+```text
+zero-shot 直接预测股票收益
+```
+
+股票收益的信噪比太低，zero-shot 很可能不稳定。更现实的方式是用预训练模型产生 embedding，再让 LightGBM/MLP/排序头做下游训练。
+
+### 13.4 我不建议你优先做的方向
+
+| 方向 | 为什么暂时不优先 |
+|---|---|
+| 直接微调金融 LLM 预测涨跌 | 成本高、评估难、容易泄漏，未必比结构化事件特征强 |
+| 直接强化学习选股 | 环境仿真难，reward 容易错，alpha 阶段性价比低 |
+| 大规模改 Qlib 框架 | 先出研究结果，不要先做平台工程 |
+| 只追 SOTA 时序模型 | 容易变成模型搬运，忽略数据和交易约束 |
+| 高频订单簿深度模型 | 数据、撮合、滑点、容量都复杂，除非你明确要做高频 |
+
+### 13.5 30 天高强度路线
+
+你不怕难，所以可以按 30 天压缩路线走。
+
+#### 第 1-3 天：统一实验基准
+
+交付物：
+
+- 一个固定的 baseline leaderboard。
+- 至少包含 `LightGBM Alpha158`、`LightGBM Alpha360`、`DoubleEnsemble`。
+- 指标包含 IC、Rank IC、ICIR、Rank ICIR、年化、IR、MDD、换手。
+
+目标：
+
+```text
+任何新想法 1 天内能进 leaderboard。
+```
+
+#### 第 4-7 天：动态市场 baseline
+
+交付物：
+
+- rolling LightGBM。
+- 短窗/长窗模型对比。
+- 最近 IC 加权 ensemble。
+
+目标：
+
+```text
+判断“市场动态适应”是否比固定模型有稳定增量。
+```
+
+#### 第 8-14 天：LLM 事件因子 MVP
+
+交付物：
+
+- 一个最小新闻/公告事件表。
+- LLM/FinBERT 输出结构化事件字段。
+- 事件特征并入 Qlib dataset。
+- 和无文本 baseline 做消融。
+
+目标：
+
+```text
+判断“文本事件”是否在你的数据源上有增量。
+```
+
+#### 第 15-20 天：图聚合特征
+
+交付物：
+
+- 行业/概念邻居聚合特征。
+- 文本事件在行业/概念图上的扩散特征。
+- 简单图聚合 vs 无图 baseline。
+
+目标：
+
+```text
+先证明图关系特征有效，再决定是否上 GNN。
+```
+
+#### 第 21-26 天：现代时序 backbone
+
+交付物：
+
+- 接入 PatchTST 或 iTransformer 中的一个。
+- 使用 Alpha360，保持同样 label 和策略。
+- 与 GRU/TCN/Transformer 对比。
+
+目标：
+
+```text
+判断现代 backbone 是否真的比 Qlib 旧深度模型有交易指标增量。
+```
+
+#### 第 27-30 天：方向裁剪
+
+把四条线放到一张表：
+
+| 方向 | 增量 | 稳定性 | 工程成本 | 数据依赖 | 是否继续 |
+|---|---|---|---|---|---|
+| 动态市场适应 | 高/中/低 | 高/中/低 | 高/中/低 | 高/中/低 | yes/no |
+| LLM 事件因子 | 高/中/低 | 高/中/低 | 高/中/低 | 高/中/低 | yes/no |
+| 图关系扩散 | 高/中/低 | 高/中/低 | 高/中/低 | 高/中/低 | yes/no |
+| 现代时序 backbone | 高/中/低 | 高/中/低 | 高/中/低 | 高/中/低 | yes/no |
+
+最终只保留 1-2 条主线继续深挖。不要四条线长期并行，否则很容易每条都浅。
+
+### 13.6 我给你的具体推荐排序
+
+结合你的 NLP/LLM 背景，我建议顺序是：
+
+```text
+1. 统一实验流水线和 leaderboard
+2. 动态市场适应：rolling + ensemble + regime gating
+3. LLM 事件因子：新闻/公告 -> 结构化事件 -> LightGBM 消融
+4. 图关系扩散：行业/概念/供应链事件传播
+5. 现代时序 backbone：PatchTST/iTransformer 替换旧 Transformer
+6. 自动化研究 Agent：让 LLM 生成因子、配置和实验报告
+```
+
+最可能形成差异化优势的是：
+
+```text
+LLM 事件结构化
+  + 图关系扩散
+  + 动态市场 gating
+  + 稳健树模型/DoubleEnsemble
+```
+
+这比单纯做一个“更深的神经网络”更有胜率，因为它同时利用了你的 NLP 能力、Qlib 的结构化回测能力，以及金融市场最关键的非平稳特征。
+
+### 13.7 最终研究命题
+
+如果要把你的研究方向压缩成一个清晰命题，我建议是：
+
+```text
+构建一个 LLM 辅助的 data-centric alpha research system：
+用 LLM 将非结构化金融文本转化为 point-in-time 事件因子，
+用图关系建模事件扩散，
+用动态 gating 适应市场状态变化，
+最后用 LightGBM/DoubleEnsemble/排序模型产生可交易 alpha。
+```
+
+这个命题足够具体，也足够有上限。它不是简单追模型，而是把数据、文本、关系、动态市场和可交易验证合在一起。对你的背景来说，这是最值得优先投入的方向。
