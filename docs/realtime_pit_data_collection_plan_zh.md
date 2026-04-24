@@ -53,6 +53,34 @@ PIT-AShare Event Lake
 A 股 Point-in-Time 多源事件数据湖
 ```
 
+更准确地说，这个长期项目应该拆成两个互相独立的系统：
+
+```text
+系统 A：数据收集层
+  目标：长期、稳定、低假设、不可变地保存当时看到的原始事实。
+  特点：永远有用，尽量不绑定任何模型、事件 schema、特征工程方法。
+
+系统 B：后处理/研究层
+  目标：基于数据收集层反复重算事件、实体、超图、特征、模型和策略。
+  特点：随时可以推倒重来，允许今天用规则，明天用 LLM，后天用更强的多模态/超图方法。
+```
+
+这是整份方案最重要的工程原则：
+
+> 数据收集层要像“不可变事实金库”，后处理层要像“可替换研究实验室”。
+
+不要让某一版 LLM prompt、某一版事件分类、某一版超图关系、某一版模型结构决定你原始数据怎么存。原始数据只负责回答：
+
+```text
+我在什么时候，从哪里，看到了什么，原文是什么，原始响应是什么。
+```
+
+后处理层才负责回答：
+
+```text
+这条信息意味着什么，影响谁，如何结构化，如何生成特征，如何训练模型。
+```
+
 ## 1. 你这个思路为什么有价值
 
 ### 1.1 个人量化最大的问题不是没有模型
@@ -253,6 +281,90 @@ Layer 10: Monitoring / Audit / Backup
 所有数据都有来源、时间、版本、哈希
 ```
 
+### 3.0 先拆成两条管线
+
+从工程上不要把“采集”和“后处理”写成一条强耦合流水线，而要拆成两条管线。
+
+#### 管线 A：数据收集层
+
+数据收集层只做事实保存：
+
+```text
+Source Registry
+  -> Crawler / Connector
+  -> Crawl Ledger
+  -> Raw Append-Only Data Lake
+  -> Minimal Normalization
+  -> Collection Manifest
+```
+
+它的职责：
+
+- 发现数据源。
+- 定时访问数据源。
+- 保存原始响应、原始文件、原始字段。
+- 记录 first_seen_at、crawl_time、source_publish_time。
+- 做最小必要去重。
+- 记录哈希、请求参数、响应状态。
+- 保存数据源授权、robots、访问频率。
+- 生成每日采集质量报告。
+
+它不应该负责：
+
+- 判断新闻利好还是利空。
+- 判断事件影响哪些股票。
+- 生成复杂事件 schema。
+- 构建超图。
+- 生成模型特征。
+- 做训练和回测。
+
+原因很简单：
+
+> 采集层的目标是让数据资产长期有效，不要被当前研究方法污染。
+
+#### 管线 B：后处理/研究层
+
+后处理层从采集层读取数据，再反复加工：
+
+```text
+Raw Data Lake
+  -> Parser / OCR / Cleaner
+  -> LLM Event Extractor
+  -> Entity Linking
+  -> Graph / Hypergraph Builder
+  -> PIT Feature Generator
+  -> Model Training
+  -> Backtest / Paper Trading
+```
+
+它的职责：
+
+- 解析网页、PDF、JSON、CSV。
+- 抽取事件。
+- 做实体识别和实体链接。
+- 构建普通图、异构图、超图。
+- 生成 point-in-time 特征。
+- 训练模型。
+- 回测和模拟交易。
+- 做消融实验。
+
+它必须满足：
+
+```text
+所有产物都可以从采集层原始数据重算。
+所有产物都有 processor_version / prompt_version / model_version。
+任何后处理结果都不能覆盖原始数据。
+```
+
+#### 两条管线的关系
+
+```text
+数据收集层：稳定、保守、少假设、长期积累
+后处理层：激进、可变、可实验、持续升级
+```
+
+你可以今天用简单规则抽事件，明天换成 FinBERT，后天换成金融 LLM，再之后换成多模态模型。只要原始数据收集层干净，后处理方法可以无限迭代。
+
 ### 3.1 架构图
 
 ```text
@@ -275,8 +387,8 @@ Layer 10: Monitoring / Audit / Backup
                                    |
                                    v
                          +--------------------+
-                         | Normalizers        |
-                         | 去重/解析/统一时间    |
+                         | Minimal Normalizer |
+                         | 最小标准化/不做语义判断 |
                          +---------+----------+
                                    |
                                    v
@@ -289,6 +401,20 @@ Layer 10: Monitoring / Audit / Backup
    +---------+----------+                      +---------+----------+
              |                                           |
              v                                           v
+   +--------------------+                      +--------------------+
+   | Collection Vault   |                      | Collection Manifest|
+   | 采集层稳定资产       |                      | 数据版本/血缘/质量     |
+   +---------+----------+                      +---------+----------+
+             |                                           |
+             +---------------------+---------------------+
+                                   |
+                                   v
+                         +--------------------+
+                         | Post-processing    |
+                         | 可替换研究管线       |
+                         +---------+----------+
+                                   |
+                                   v
    +--------------------+                      +--------------------+
    | Entity Master      | <------------------- | LLM Event Extractor |
    | 股票/公司/行业/商品   |                      | 事件/情绪/风险/主题    |
@@ -789,6 +915,22 @@ rolling surprise proxy
 
 ## 7. “从今天开始采集”的核心表设计
 
+这一节要明确分层：
+
+```text
+7.1 - 7.6：数据收集层/主数据层
+  目标：保存事实、来源、时间、版本、原始内容。
+  原则：尽量稳定，长期不变。
+
+7.7 - 7.11：后处理/研究层
+  目标：保存事件、实体链接、超图、特征、标签等派生产物。
+  原则：可以反复重算，必须带版本。
+```
+
+最重要的边界：
+
+> 采集层表不能依赖后处理层表；后处理层表可以随时删除重建，但采集层表不能丢。
+
 ### 7.1 source_registry
 
 记录所有数据源。
@@ -954,6 +1096,8 @@ event_topic
 
 LLM/规则抽取后的事件。
 
+从这里开始属于**后处理层**，不是原始采集层。`event_table` 可以随着事件分类体系、LLM、prompt、抽取规则变化而重算，所以必须保存抽取器版本。
+
 ```sql
 event_id
 doc_id
@@ -981,6 +1125,8 @@ created_at
 ### 7.8 event_entity_link
 
 事件和实体的关系。
+
+这是后处理层表。实体链接方法未来一定会升级，所以不要把它当成不可变事实；它只是在某个版本方法下的解释结果。
 
 ```sql
 event_id
@@ -1015,6 +1161,8 @@ sentiment_target
 ### 7.9 hyperedge_table
 
 超图关系。
+
+这是后处理层表。超图关系非常有研究价值，但它不是原始事实本身，而是对原始数据和主数据关系的一种建模方式。未来可能有更好的超图构建、权重学习、动态关系发现方法，因此必须版本化。
 
 ```sql
 hyperedge_id
@@ -1053,6 +1201,8 @@ macro_sensitivity_group
 
 每天生成的模型特征。
 
+这是后处理层表。特征永远是可替换的，不要把特征当成数据资产的核心；真正的核心是能重新生成特征的原始数据、时间账本和处理版本。
+
 ```sql
 feature_date
 cutoff_time
@@ -1075,6 +1225,8 @@ data_manifest_hash
 ### 7.11 label_table
 
 标签也必须从今天开始生成。
+
+标签比特征更稳定，但仍然属于研究层产物，因为不同策略会定义不同收益区间、交易价格、复权方式、行业中性方式和成本假设。标签也要版本化。
 
 ```sql
 label_date
@@ -1148,6 +1300,15 @@ data_lake/
     announcements/
     macro/
     commodities/
+  collection_manifests/
+    dt=2026-04-24/
+      source_status.json
+      raw_file_manifest.json
+      crawl_quality_report.json
+  postprocess/
+    parser_runs/
+    extractor_runs/
+    entity_linking_runs/
   events/
     event_table/
     event_entity_link/
@@ -1160,6 +1321,33 @@ data_lake/
   labels/
   manifests/
   logs/
+```
+
+更推荐从第一天就按“采集资产”和“后处理产物”分开：
+
+```text
+data_lake/
+  collection/
+    raw/              # 原始响应、PDF、HTML、JSON、CSV，永不覆盖
+    normalized_min/   # 最小标准化，只做字段和时间统一，不做语义判断
+    manifests/        # 每日采集清单、哈希、数据质量
+    metadata/         # source_registry、crawl_run、raw_document
+
+  derived/
+    parsed/           # 文本解析、PDF OCR、正文抽取
+    events/           # 事件抽取结果
+    entities/         # 实体识别和链接结果
+    graph/            # 图/超图关系
+    features/         # PIT 特征
+    labels/           # 标签
+    models/           # 模型和预测结果
+```
+
+判断一个文件应该放哪里：
+
+```text
+如果它是“当时看到的事实”，放 collection。
+如果它是“后来某个方法解释出来的结果”，放 derived。
 ```
 
 ### 8.3 文件命名
@@ -1823,6 +2011,15 @@ LLM 抽取出的结构化事件
 
 ## 18. 立即启动方案：前 30 天
 
+前 30 天建议严格拆成两个目标：
+
+```text
+第一目标：采集层稳定运行
+第二目标：后处理层最小闭环
+```
+
+如果时间不够，优先保证第一目标。因为采集层每天都在积累不可逆的数据资产，而后处理方法以后可以随时升级。
+
 ### 第 1-3 天：搭基础框架
 
 完成：
@@ -1910,6 +2107,20 @@ date x instrument
 跑 baseline + event features
 生成 paper trading 信号
 ```
+
+### 采集优先级高于后处理
+
+第一个月的优先级应该是：
+
+```text
+P0: 采集不断流、原始数据不丢、时间戳可信
+P1: 最小解析和去重
+P2: 简单事件抽取
+P3: 简单特征和 Qlib 接入
+P4: 模型效果
+```
+
+如果某天只能做一件事，优先修采集器、补日志、补 manifest，而不是调模型。
 
 第一个月不要追求收益，追求：
 
@@ -2123,7 +2334,11 @@ CatBoost
 
 ## 24. 后续可以直接落地的开发任务
 
-下一步可以从代码层面实现 V0：
+下一步可以从代码层面实现 V0，但必须拆成两个 milestone。
+
+### V0-A：只做数据收集层
+
+这是最高优先级。它的目标不是赚钱，也不是预测，而是每天稳定产生干净、可审计、不可变的数据资产。
 
 ```text
 1. 创建 source_registry.yaml
@@ -2133,9 +2348,34 @@ CatBoost
 5. 实现公告/新闻 RSS/GDELT 采集器
 6. 实现 content_hash 去重
 7. 实现每日采集报告
-8. 实现第一版 event_table schema
-9. 实现 LLM 事件抽取占位接口
-10. 实现 Qlib 特征导出模板
+8. 实现 collection_manifest
+9. 实现 crawler health check
+10. 实现原始数据备份
+```
+
+V0-A 的验收标准：
+
+```text
+连续 30 天采集不断流
+所有原始数据都有 first_seen_at
+所有原始文件都有 content_hash
+所有 crawler run 都有日志
+任何一天的数据都能按 manifest 复盘
+```
+
+### V0-B：再做后处理最小闭环
+
+后处理层可以晚一点做，也可以不断推倒重来。
+
+```text
+1. 实现第一版 parser
+2. 实现第一版 event_table schema
+3. 实现 LLM 事件抽取占位接口
+4. 实现 entity_link 候选匹配
+5. 实现第一版 hyperedge schema
+6. 实现 Qlib 特征导出模板
+7. 实现 LightGBM baseline
+8. 实现 paper trading 信号记录
 ```
 
 建议先实现最小版本，不要一开始写复杂平台。
@@ -2169,4 +2409,3 @@ CatBoost
 - Common Crawl News / Crawl 数据：开放网页抓取数据，可用于研究公开网页历史语料。https://commoncrawl.org/
 - Caldara & Iacoviello Geopolitical Risk Index。https://www.matteoiacoviello.com/gpr.htm
 - AI-GPR Index：LLM 生成的日频地缘政治风险指数。https://www.matteoiacoviello.com/ai_gpr.html
-
