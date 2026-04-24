@@ -5,6 +5,8 @@
 > 适用读者：已经理解机器学习、深度学习、NLP/LLM、Qlib 基本流程，希望尽快找准研究方向的工程师  
 > 免责声明：本文是研究路线与工程方案，不构成投资建议。
 
+> 文档职责划分：`realtime_pit_data_collection_plan_zh.md` 只负责“如何长期、干净、可审计地收集原始数据”；本文负责“数据收集好之后如何使用”，包括解析、事件抽取、实体链接、图/超图、特征、训练、评估和迭代研究。
+
 ## 0. 一句话结论
 
 你的想法是对的，而且很有研究价值：**数据比模型更重要，尤其是在金融预测里，谁能更早、更准、更稳定地把现实世界事件转成 point-in-time 的可训练信号，谁就更接近长期优势。**
@@ -321,6 +323,419 @@ Event-Centric Data Lake
 
 这样才能进入稳定的量化回测。
 
+### 4.3 数据收集好后，后处理层应该怎么用
+
+现在 `realtime_pit_data_collection_plan_zh.md` 已经把采集层独立出来，本文从这里开始只讨论后处理层。
+
+后处理层的输入不是“随便一堆历史数据”，而是采集层留下的可审计资产：
+
+```text
+source_registry
+crawl_run
+raw_item
+raw_file
+market_snapshot_raw
+collection_manifest
+source_health
+manual_versioned_datasets
+```
+
+后处理层的输出是可重算的研究产物：
+
+```text
+parsed_text
+normalized_tables
+event_table
+event_entity_link
+entity_master
+relation_tables
+hyperedge_table
+feature_snapshot
+label_table
+model_predictions
+backtest_reports
+```
+
+核心边界：
+
+> 后处理层可以无限重算，但不能改写采集层的原始事实。
+
+也就是说，今天你用简单 prompt 抽事件，明天换更强 LLM，后天换多模态模型，都可以；但所有版本都应该从同一批 `raw_item/raw_file` 重新生成。
+
+### 4.4 后处理总流程
+
+建议采用 9 步管线：
+
+```text
+Step 1: Raw Collection Vault
+Step 2: Parser / Cleaner
+Step 3: Document Index
+Step 4: Event Extraction
+Step 5: Entity Linking
+Step 6: Relation Expansion
+Step 7: Graph / Hypergraph Builder
+Step 8: PIT Feature Generator
+Step 9: Qlib Training / Backtest / Paper Trading
+```
+
+每一步都必须带版本：
+
+```text
+parser_version
+extractor_version
+prompt_version
+entity_linker_version
+hypergraph_builder_version
+feature_version
+label_version
+model_version
+```
+
+这样你以后可以比较：
+
+```text
+同一批原始数据
+  -> 规则抽取 v1
+  -> LLM 抽取 v2
+  -> RAG + LLM 抽取 v3
+  -> 多模型投票抽取 v4
+```
+
+最终看哪一版能带来真实 Rank IC 增量。
+
+### 4.5 Step 1：读取采集层，而不是复制采集层
+
+后处理层读取：
+
+```text
+collection/raw/
+collection/metadata/
+collection/manifests/
+```
+
+但不要把原始数据搬来搬去。建议保存派生产物引用：
+
+```text
+doc_id
+raw_item_id
+raw_file_id
+content_hash
+source_id
+first_seen_at
+source_publish_time
+```
+
+这样每个事件、实体链接、特征都能追溯到原始数据。
+
+### 4.6 Step 2：解析和清洗
+
+采集层只负责保存原始文件，后处理层负责解析：
+
+| 原始类型 | 后处理解析 |
+| --- | --- |
+| HTML | 正文抽取、标题、发布时间、正文块 |
+| PDF | PDF 文本提取、OCR、表格抽取 |
+| JSON API | 字段映射、数组展开 |
+| CSV/Excel | 表头标准化、单位识别 |
+| 图片 | OCR、图表文本提取，可后做 |
+| 行情快照 | 标准 OHLCV/盘口字段 |
+
+解析结果建议表：
+
+```sql
+parsed_document
+  parsed_doc_id
+  raw_item_id
+  raw_file_id
+  parser_name
+  parser_version
+  parse_time
+  title
+  body_text
+  tables_path
+  language
+  parse_quality
+  content_hash
+```
+
+注意：
+
+- 解析失败不要删除原始数据。
+- 解析结果可以随 parser 升级而重算。
+- PDF/OCR 的质量分数要保存。
+
+### 4.7 Step 3：文档索引
+
+后处理层需要一个检索索引，方便 LLM/RAG/人工检查：
+
+```text
+document_id
+raw_item_id
+source_id
+title
+body_text
+publish_time
+first_seen_at
+document_type
+language
+symbols_mentioned_candidate
+keywords
+embedding_vector
+```
+
+索引用途：
+
+- 去重。
+- 找相似新闻。
+- 计算事件新颖度。
+- 给 LLM 提供上下文。
+- 追踪同一事件的传播路径。
+- 做主题聚类。
+
+### 4.8 Step 4：事件抽取
+
+事件抽取是后处理层的核心。
+
+建议不要一开始追求完美 ontology。先定义一个可扩展事件 schema：
+
+```json
+{
+  "event_type": "policy_support",
+  "event_subtype": "industry_policy",
+  "event_time": "2026-04-24T20:15:00+08:00",
+  "visible_time": "2026-04-24T20:20:00+08:00",
+  "summary": "某政策支持新能源产业链发展",
+  "subject_entities": ["policy_body:xxx"],
+  "object_entities": ["industry:new_energy"],
+  "mentioned_entities": ["company:xxx"],
+  "impact_candidates": [
+    {
+      "entity": "industry:new_energy",
+      "direction": "positive",
+      "strength": 0.72,
+      "confidence": 0.81
+    }
+  ],
+  "sentiment": 0.64,
+  "risk_score": 0.18,
+  "novelty": 0.55,
+  "uncertainty": 0.30,
+  "evidence": ["原文证据句"],
+  "extractor_version": "llm_event_v1"
+}
+```
+
+事件抽取建议分 3 层：
+
+```text
+规则层：公告类别、标题关键词、来源类型。
+小模型层：金融情绪、主题分类、NER。
+LLM 层：复杂事件结构化、影响方向、证据句抽取。
+```
+
+LLM 不要直接预测涨跌，先做结构化信息抽取。
+
+### 4.9 Step 5：实体链接
+
+实体链接决定事件能否落到股票。
+
+实体库至少包含：
+
+```text
+stock
+company
+industry
+concept
+commodity
+country
+region
+policy_body
+product
+technology
+person
+fund
+macro_indicator
+```
+
+链接流程：
+
+```text
+实体识别
+  -> 别名匹配
+  -> 候选召回
+  -> 上下文 rerank
+  -> LLM/规则消歧
+  -> 置信度打分
+  -> 人工抽样校验
+```
+
+实体链接表：
+
+```sql
+event_entity_link
+  event_id
+  entity_id
+  entity_type
+  relation_type
+  impact_direction
+  impact_strength
+  confidence
+  evidence
+  linker_version
+```
+
+重点：
+
+- 不确定的链接不要强行落股。
+- 低置信度可以保留，但训练时分组比较。
+- 别名库要版本化。
+
+### 4.10 Step 6：关系扩展
+
+事件直接提到的股票通常很少。真正有价值的是关系扩展：
+
+```text
+事件提到商品 -> 扩展到商品生产商/消费商
+事件提到地区 -> 扩展到当地上市公司
+事件提到政策主题 -> 扩展到受益/受损行业
+事件提到产业链节点 -> 扩展到上下游公司
+事件提到海外国家 -> 扩展到出口/进口暴露公司
+事件提到气候灾害 -> 扩展到地区、农业、电力、物流
+```
+
+关系扩展要保存来源：
+
+```sql
+relation_expansion
+  source_event_id
+  source_entity_id
+  expanded_entity_id
+  expansion_rule
+  relation_type
+  confidence
+  evidence_source
+  builder_version
+```
+
+不能把扩展结果当成事实，它只是某个版本关系规则下的推断。
+
+### 4.11 Step 7：构建图和超图
+
+普通图适合二元关系：
+
+```text
+company -> industry
+company -> commodity
+company -> region
+company -> supplier/customer
+event -> mentioned_entity
+```
+
+超图适合高阶关系：
+
+```text
+一个事件影响一组股票/行业/商品/地区
+一个政策主题连接一组行业
+一个商品价格冲击连接生产商和消费商
+一个灾害连接地区、港口、电力、物流、公司
+一个舆情主题连接共同被讨论的股票
+```
+
+超边表：
+
+```sql
+hyperedge_table
+  hyperedge_id
+  hyperedge_type
+  timestamp
+  cutoff_time
+  node_ids
+  node_types
+  weight
+  direction
+  confidence
+  source_event_id
+  builder_version
+```
+
+建议先做规则超图，再做学习式超图：
+
+```text
+v1: 行业/概念/商品/事件影响超边
+v2: 加权超边
+v3: 动态共振超边
+v4: 超图注意力模型
+```
+
+### 4.12 Step 8：生成 PIT 特征
+
+特征生成必须传入：
+
+```text
+cutoff_time
+universe
+feature_version
+```
+
+只使用：
+
+```text
+first_seen_at <= cutoff_time
+derived_visible_time <= cutoff_time
+```
+
+特征例子：
+
+```text
+own_event_count_1d
+own_negative_event_count_5d
+own_policy_support_score_20d
+industry_event_heat_5d
+commodity_exposure_return_5d
+hyperedge_neighbor_sentiment_5d
+hyperedge_neighbor_volume_surprise_3d
+geopolitical_exposure_score_20d
+climate_disaster_exposure_20d
+topic_novelty_score_5d
+```
+
+每批特征必须保存 manifest：
+
+```json
+{
+  "feature_date": "2026-04-24",
+  "cutoff_time": "2026-04-24T20:00:00+08:00",
+  "feature_version": "event_hypergraph_v1",
+  "input_collection_manifest": "collection_manifest_20260424",
+  "event_extractor_version": "llm_event_v1",
+  "hypergraph_builder_version": "hyper_v1",
+  "row_count": 5200,
+  "feature_count": 120
+}
+```
+
+### 4.13 Step 9：训练、回测和纸面交易
+
+模型训练要晚于数据积累。
+
+建议节奏：
+
+| 数据积累 | 适合做什么 |
+| --- | --- |
+| 1 个月 | 数据质量、事件统计、人工抽查、纸面特征 |
+| 3 个月 | LightGBM/线性模型、短 horizon 消融 |
+| 6 个月 | rolling 训练、市场状态分组、超图聚合 |
+| 12 个月 | 动态超图、门控模型、稳健性测试 |
+| 1-3 年 | 低频事件、地缘/气候/宏观长期研究 |
+
+第一阶段不要训练复杂大模型。先证明：
+
+```text
+采集层新增数据
+  -> 后处理事件/超图特征
+  -> 在 Alpha158/Alpha360 外有增量 Rank IC
+```
+
 ## 5. 推荐的大一统架构
 
 我建议你把整个系统抽象成 8 层。
@@ -338,7 +753,22 @@ Layer 8: Portfolio & Risk
 
 ### 5.1 Layer 1: 原始数据湖
 
-目标：保存一切原始信息，不急着决定哪些有用。
+这一层不在本文展开，详细设计见 `realtime_pit_data_collection_plan_zh.md`。在本文中，它被视为已经存在的输入层。
+
+目标不是重新采集数据，而是从采集层读取：
+
+```text
+raw_item
+raw_file
+market_snapshot_raw
+collection_manifest
+source_registry
+crawl_run
+```
+
+后处理层只引用这些原始数据，不覆盖、不改写。
+
+采集层应该已经保存以下类别的原始信息：
 
 数据类别：
 
@@ -1552,24 +1982,35 @@ masked affected entity prediction
 
 ## 15. 最小实现架构
 
+本节从后处理层角度设计，不重复采集层。采集层的 `collection/raw`、`raw_item`、`raw_file`、`collection_manifest` 是输入；本节只保存可重算的 `derived` 产物。
+
 建议先这样落地：
 
 ```text
-data/raw/
-  news/
-  announcements/
-  macro/
-  gdelt/
-
-data/intermediate/
-  events.parquet
-  entities.parquet
-  event_entity_links.parquet
-  hyperedges.parquet
-
-data/features/
-  event_features.parquet
-  hypergraph_features.parquet
+data_lake/derived/
+  parsed/
+    parsed_document.parquet
+    document_index.parquet
+  extraction_runs/
+    parser_runs.parquet
+    llm_event_runs.parquet
+  events/
+    events.parquet
+    entities.parquet
+    event_entity_links.parquet
+  relations/
+    relation_expansion.parquet
+    entity_aliases.parquet
+  graph/
+    hyperedges.parquet
+  features/
+    event_features.parquet
+    hypergraph_features.parquet
+  labels/
+    labels.parquet
+  models/
+    predictions.parquet
+    backtest_reports/
 
 qlib workflow:
   DataHandler
@@ -1866,4 +2307,3 @@ LLM 负责结构化事件，量化模型负责预测和回测。
 - Fang et al., **TD-HCN: A trend-driven hypergraph convolutional network for stock return prediction**, Neural Networks, 2025。https://www.sciencedirect.com/science/article/abs/pii/S0893608025006094
 - Yi et al., **Robust stock trend prediction via volatility detection and hierarchical multi-relational hypergraph attention**, Knowledge-Based Systems, 2025。https://www.sciencedirect.com/science/article/abs/pii/S0950705125013243
 - Zhang et al., **A multifactor model using large language models and multimodal investor sentiment**, International Review of Economics & Finance, 2025。https://www.sciencedirect.com/science/article/pii/S1059056025004447
-

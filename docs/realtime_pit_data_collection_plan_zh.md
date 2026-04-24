@@ -1,960 +1,727 @@
-# 从今天开始构建 Point-in-Time A 股多源实时数据系统
+# A 股 Point-in-Time 实时数据收集层实施方案
 
-> 面向个人量化研究者的长期实施方案  
+> 面向个人量化研究者的长期数据收集手册  
 > 更新时间：2026-04-24  
-> 目标：从现在开始持续、自动、可审计地收集 A 股相关结构化与非结构化信息，避免历史数据未来函数，逐步训练和迭代事件/超图/排序模型。  
-> 免责声明：本文是工程与研究方案，不构成投资建议；涉及爬虫和数据使用时，应遵守网站服务条款、robots 协议、版权限制和数据供应商授权。
+> 本文只描述“数据收集层”：如何从今天开始长期、自动、可审计、不可变地保存 A 股相关原始信息。  
+> 事件抽取、实体链接、超图、特征、训练、回测等后处理方法，放在 `unified_event_hypergraph_alpha_research_zh.md` 中讨论。  
+> 免责声明：本文是工程与研究方案，不构成投资建议。采集数据时应遵守网站服务条款、robots 协议、版权限制、API 限额和数据供应商授权。
 
-## 0. 最终结论
+## 0. 核心定位
 
-你的思路**可行，而且对个人研究者很现实**：
-
-> 不再强行拼接无法验证 point-in-time 的历史新闻、舆情、宏观、事件数据，而是从今天开始建立一个完全由自己采集、自己留痕、自己审计的实时数据账本。
-
-这条路线的最大价值不是短期立刻赚钱，而是建立长期数据资产：
+这份文档的目标不是训练模型，也不是判断哪些新闻利好利空，而是建立一个长期可复用的数据资产：
 
 ```text
-从今天开始持续采集
-  -> 每条数据记录 first_seen_at / visible_time
-  -> 原始内容不可变保存
-  -> 每日生成 point-in-time 特征
-  -> 每日生成未来标签
-  -> 每月/每季滚动训练
-  -> 每次模型只使用当时已看到的数据
+从今天开始，把当时能看到的 A 股相关信息，按真实可见时间保存下来。
 ```
 
-这样做可以最大程度避免：
-
-- 新闻历史回填导致未来函数
-- 财报/公告按报告期误用
-- 宏观数据修订泄漏
-- 概念板块事后归因
-- 产业链关系事后整理
-- 舆情热度事后采样
-- 事件影响事后解释
-
-但也要接受几个现实：
-
-1. **几个月数据不足以训练复杂大模型**。几个月可以训练 LightGBM、线性排序、简单融合模型，并验证事件特征是否有增量。
-2. **个人无法低成本覆盖“全世界所有信息”**。正确做法是分层覆盖，先抓高信噪比、低合规风险、低成本的数据源。
-3. **实时不是越高频越好**。如果你做日频/隔夜/数日持有策略，1 分钟行情、5-15 分钟新闻轮询、盘后统一特征快照已经足够起步。
-4. **数据工程比模型更重要**。最核心的是 append-only 原始数据湖、时间账本、数据血缘、可回放特征生成，而不是一开始上复杂模型。
-5. **未来价值很大**。如果连续采集 1-3 年，你将拥有个人很难买到的干净事件-市场联动数据集，这是研究事件驱动、超图关系、动态市场状态的核心资产。
-
-我建议把这个长期项目命名为：
+这个数据资产应该回答 6 个问题：
 
 ```text
-PIT-AShare Event Lake
+什么时候采集的？
+从哪里采集的？
+当时页面/API/文件返回了什么？
+原始内容有没有被保存？
+这是第一次看到，还是重复/更新？
+未来能否按当时状态完整回放？
 ```
 
-或者：
+不要让采集层回答这些问题：
 
 ```text
-A 股 Point-in-Time 多源事件数据湖
+这条新闻影响哪些股票？
+这是利好还是利空？
+应该生成什么事件？
+应该连成什么超图？
+应该训练什么模型？
 ```
 
-更准确地说，这个长期项目应该拆成两个互相独立的系统：
+这些都属于后处理层。后处理方法会不断升级，采集层必须尽量稳定。
+
+## 1. 最重要原则：采集层和后处理层分离
+
+长期项目应该拆成两个系统。
 
 ```text
 系统 A：数据收集层
-  目标：长期、稳定、低假设、不可变地保存当时看到的原始事实。
+  目标：长期、稳定、低假设、不可变地保存当时看到的事实。
+  输出：raw data、metadata、crawl ledger、collection manifest。
   特点：永远有用，尽量不绑定任何模型、事件 schema、特征工程方法。
 
 系统 B：后处理/研究层
-  目标：基于数据收集层反复重算事件、实体、超图、特征、模型和策略。
-  特点：随时可以推倒重来，允许今天用规则，明天用 LLM，后天用更强的多模态/超图方法。
+  目标：基于收集层反复重算事件、实体、图、超图、特征、模型和策略。
+  输出：events、entity links、hyperedges、features、labels、predictions。
+  特点：可替换、可重算、可实验。
 ```
 
-这是整份方案最重要的工程原则：
+本文只写系统 A。
+
+一句话：
 
 > 数据收集层要像“不可变事实金库”，后处理层要像“可替换研究实验室”。
 
-不要让某一版 LLM prompt、某一版事件分类、某一版超图关系、某一版模型结构决定你原始数据怎么存。原始数据只负责回答：
+采集层只负责：
+
+- 发现数据源。
+- 定时采集。
+- 保存原始响应。
+- 保存原始文件。
+- 记录时间戳。
+- 记录请求参数。
+- 记录版本和哈希。
+- 做最小去重。
+- 做最小字段标准化。
+- 记录数据质量。
+- 生成每日 manifest。
+- 做备份和监控。
+
+采集层不负责：
+
+- LLM 事件抽取。
+- 金融情绪打分。
+- 实体链接。
+- 产业链推断。
+- 图/超图构建。
+- 特征工程。
+- 标签生成。
+- 模型训练。
+- 回测和交易。
+
+## 2. 为什么个人更应该从采集层开始
+
+个人量化最容易踩的坑不是模型，而是数据：
+
+- 历史新闻库可能回填。
+- 历史概念板块可能事后归因。
+- 宏观数据可能修订。
+- 财报数据可能按报告期误用。
+- 公告的报告日期和披露日期可能混淆。
+- 舆情热度可能只能拿到当前快照。
+- 产业链关系可能是后来整理出来的。
+- 很多网站不会保留历史页面状态。
+
+从今天开始自己采集，可以建立一个最干净的时间账本：
 
 ```text
-我在什么时候，从哪里，看到了什么，原文是什么，原始响应是什么。
+我当时确实看到了什么。
 ```
 
-后处理层才负责回答：
+只要这个账本足够干净，以后无论换什么 LLM、图模型、超图模型、因子模型，都可以从原始数据重新生成后处理结果。
+
+## 3. 项目目标和非目标
+
+### 3.1 目标
+
+数据收集层的目标：
 
 ```text
-这条信息意味着什么，影响谁，如何结构化，如何生成特征，如何训练模型。
+连续多年稳定采集 A 股相关多源信息；
+所有原始数据 append-only 保存；
+所有数据都有 first_seen_at；
+所有采集任务都有 crawl_run 记录；
+所有文件都有 content_hash；
+所有数据源都有 source_registry；
+每天都有 collection_manifest；
+任何一天都能回放当时看到的数据集合。
 ```
 
-## 1. 你这个思路为什么有价值
+### 3.2 非目标
 
-### 1.1 个人量化最大的问题不是没有模型
-
-现在有大模型、有开源框架、有 Qlib、有 LightGBM、有各种深度学习模型。个人真正难的是：
-
-- 没有干净数据。
-- 没有真实发布时间。
-- 没有长期可回放的数据快照。
-- 不知道某条信息在当时是否已经可见。
-- 不知道数据是否被后来修订。
-- 很难证明模型不是学到了未来函数。
-
-所以，你提出“从今天开始自己采集”的思路，本质上是在解决个人量化最致命的问题：
+本文件不做：
 
 ```text
-数据可信度 > 模型复杂度
+事件抽取
+实体链接
+超图构建
+特征生成
+模型训练
+回测
+策略评估
 ```
 
-### 1.2 从今天开始采集，是最干净的 point-in-time 方案
+这些全部放到另一份文档。
 
-历史数据最大的问题是：
+### 3.3 第一阶段最小目标
+
+最小可用采集系统不需要复杂：
 
 ```text
-你拿到的是现在数据库里的历史版本，不一定是历史当时可见的版本。
+5 类数据源
+  A 股行情快照
+  上市公司公告
+  政策/监管新闻
+  商品/全球市场价格
+  GDELT/公开新闻事件
+
+4 张核心表
+  source_registry
+  crawl_run
+  raw_item
+  collection_manifest
+
+3 个硬约束
+  原始数据不覆盖
+  first_seen_at 不伪造
+  每日 manifest 可复盘
 ```
 
-例如：
+## 4. 总体架构
 
-- 某公司 2023 年财报数据，数据库里是修订后的最终值。
-- 某公告按报告期归档，但实际披露在几个月后。
-- 某概念板块是在 2025 年热门后才回填到过去。
-- 某新闻库后来清洗合并了重复新闻，丢失了首发时间。
-- 某宏观指标后来修订，原始初值已不可得。
-- 某事件影响行业是事后分析师总结，不代表当时市场认知。
-
-你从今天起采集，则可以做到：
-
-```text
-我什么时候看到的
-我当时看到的原文是什么
-我当时解析出了什么事件
-我当时生成了什么特征
-我当时模型做出了什么预测
-```
-
-这就是量化研究里最重要的可审计性。
-
-### 1.3 这不是放弃历史，而是拒绝不可信历史
-
-你可以把数据分成三类：
-
-| 类型 | 是否建议用 | 用法 |
-| --- | --- | --- |
-| 自己从今天起采集的数据 | 强烈建议 | 主研究数据，最干净 |
-| 官方可验证发布时间的历史数据 | 可以谨慎用 | 只用于市场行情/公告/财报等可审计数据 |
-| 无法验证当时可见性的历史新闻/舆情/概念/产业链 | 不建议直接训练 | 可以做预训练、词表、实体库、先验关系，不做监督标签训练 |
-
-也就是说，不是所有历史都不能用，而是：
-
-> 不能把不可信历史当成 point-in-time 监督训练数据。
-
-## 2. 可行性评估
-
-### 2.1 总体可行
-
-个人可以做成以下范围：
-
-```text
-日频/分钟级行情
-官方公告
-交易所/监管政策
-财经新闻/RSS/GDELT
-商品期货/大宗商品价格
-宏观数据发布
-全球市场指数
-天气/灾害/地缘风险数据
-有限舆情数据
-行业/概念/供应链半自动维护
-LLM 事件抽取
-超图关系构建
-Qlib 回测与滚动训练
-```
-
-个人不适合一开始做：
-
-```text
-全市场 Level-2 高频数据
-全网社交媒体实时舆情
-全量付费新闻源全文
-所有研报和电话会纪要
-全球供应链实时数据库
-毫秒级交易策略
-从零训练金融大模型
-```
-
-### 2.2 最现实的策略周期
-
-如果你是个人，我建议先做：
-
-```text
-盘后/隔夜决策
-T 日收盘后生成特征
-预测 T+1 到 T+5 的横截面收益
-每日或每周调仓
-```
-
-原因：
-
-- 对实时性要求低。
-- 对数据延迟容忍度高。
-- 更容易避免未来函数。
-- 更适合 Qlib。
-- 更适合事件和新闻的滞后影响。
-- 更适合个人算力和数据成本。
-
-不建议一开始做：
-
-```text
-盘中秒级事件交易
-高频盘口预测
-新闻毫秒级套利
-```
-
-这些需要专业实时行情、低延迟链路和更高数据授权成本。
-
-### 2.3 几个月后能训练什么
-
-假设你覆盖 5000 只 A 股，采集 3 个月，约 60 个交易日：
-
-```text
-样本行数 = 5000 * 60 = 300000
-```
-
-看起来很多，但要注意：
-
-- 时间维度只有 60 天。
-- 市场状态可能很单一。
-- 事件类型不均衡。
-- 20 日标签只有约 40 个有效交易日。
-- 极端事件样本非常少。
-- 横截面样本高度相关，不等于 30 万个独立样本。
-
-所以 3 个月适合：
-
-```text
-训练 LightGBM / Ridge / Logistic Ranker
-做特征消融
-验证数据链路
-做 paper trading
-```
-
-不适合：
-
-```text
-训练大型 Transformer
-训练复杂超图神经网络
-下结论某类地缘事件长期有效
-实盘重仓
-```
-
-更合理的节奏：
-
-| 时间 | 能做什么 |
-| --- | --- |
-| 0-1 个月 | 搭采集系统、数据湖、基线、监控 |
-| 1-3 个月 | 做事件特征、LightGBM 小实验、paper trading |
-| 3-6 个月 | 做滚动训练、特征消融、行业/概念超图 |
-| 6-12 个月 | 做动态超图、市场状态分层、初步策略组合 |
-| 1-3 年 | 研究地缘/气候/宏观等低频事件 |
-| 3 年以上 | 做真正有价值的事件基础模型/世界模型 |
-
-## 3. 总体架构
-
-建议设计成 10 层：
-
-```text
-Layer 0: Source Registry
-Layer 1: Raw Append-Only Data Lake
-Layer 2: Crawl Ledger
-Layer 3: Normalized Data Tables
-Layer 4: Entity Master
-Layer 5: Event Extraction
-Layer 6: Entity Linking
-Layer 7: Graph / Hypergraph
-Layer 8: Point-in-Time Feature Store
-Layer 9: Model Training / Backtest / Paper Trading
-Layer 10: Monitoring / Audit / Backup
-```
-
-核心原则：
-
-```text
-原始数据永不覆盖
-解析结果可以重算
-特征必须按 cutoff_time 生成
-模型只能看到 cutoff_time 之前 first_seen 的数据
-所有数据都有来源、时间、版本、哈希
-```
-
-### 3.0 先拆成两条管线
-
-从工程上不要把“采集”和“后处理”写成一条强耦合流水线，而要拆成两条管线。
-
-#### 管线 A：数据收集层
-
-数据收集层只做事实保存：
+数据收集层建议分 8 个模块。
 
 ```text
 Source Registry
+  -> Scheduler
   -> Crawler / Connector
   -> Crawl Ledger
-  -> Raw Append-Only Data Lake
-  -> Minimal Normalization
+  -> Raw Append-Only Store
+  -> Minimal Normalizer
   -> Collection Manifest
+  -> Monitoring / Backup
 ```
 
-它的职责：
-
-- 发现数据源。
-- 定时访问数据源。
-- 保存原始响应、原始文件、原始字段。
-- 记录 first_seen_at、crawl_time、source_publish_time。
-- 做最小必要去重。
-- 记录哈希、请求参数、响应状态。
-- 保存数据源授权、robots、访问频率。
-- 生成每日采集质量报告。
-
-它不应该负责：
-
-- 判断新闻利好还是利空。
-- 判断事件影响哪些股票。
-- 生成复杂事件 schema。
-- 构建超图。
-- 生成模型特征。
-- 做训练和回测。
-
-原因很简单：
-
-> 采集层的目标是让数据资产长期有效，不要被当前研究方法污染。
-
-#### 管线 B：后处理/研究层
-
-后处理层从采集层读取数据，再反复加工：
+### 4.1 架构图
 
 ```text
-Raw Data Lake
-  -> Parser / OCR / Cleaner
-  -> LLM Event Extractor
-  -> Entity Linking
-  -> Graph / Hypergraph Builder
-  -> PIT Feature Generator
-  -> Model Training
-  -> Backtest / Paper Trading
++------------------+
+| Source Registry  |
+| 数据源/授权/频率   |
++--------+---------+
+         |
+         v
++------------------+       +----------------------+
+| Scheduler        | ----> | Crawler / Connector  |
+| 定时/重试/限速     |       | API/RSS/Web/File      |
++------------------+       +----------+-----------+
+                                      |
+                                      v
+                            +----------------------+
+                            | Crawl Ledger         |
+                            | 每次请求和运行留痕     |
+                            +----------+-----------+
+                                      |
+                                      v
+                            +----------------------+
+                            | Raw Append-Only Store|
+                            | 原始响应/文件/快照     |
+                            +----------+-----------+
+                                      |
+                                      v
+                            +----------------------+
+                            | Minimal Normalizer   |
+                            | 最小字段/时间标准化    |
+                            +----------+-----------+
+                                      |
+                                      v
+                            +----------------------+
+                            | Collection Manifest  |
+                            | 每日清单/哈希/质量     |
+                            +----------+-----------+
+                                      |
+                                      v
+                            +----------------------+
+                            | Backup / Monitoring  |
+                            | 备份/告警/健康检查     |
+                            +----------------------+
 ```
 
-它的职责：
+### 4.2 最小标准化是什么意思
 
-- 解析网页、PDF、JSON、CSV。
-- 抽取事件。
-- 做实体识别和实体链接。
-- 构建普通图、异构图、超图。
-- 生成 point-in-time 特征。
-- 训练模型。
-- 回测和模拟交易。
-- 做消融实验。
+最小标准化只做这些事：
 
-它必须满足：
+- 统一时间格式。
+- 统一来源 ID。
+- 统一证券代码格式。
+- 记录原始字段名和标准字段名映射。
+- 生成哈希。
+- 记录 first_seen_at。
+- 判断是否重复。
+- 保存原始文件路径。
 
-```text
-所有产物都可以从采集层原始数据重算。
-所有产物都有 processor_version / prompt_version / model_version。
-任何后处理结果都不能覆盖原始数据。
-```
+最小标准化不做这些事：
 
-#### 两条管线的关系
+- 不判断语义。
+- 不抽事件。
+- 不预测影响方向。
+- 不建图。
+- 不生成因子。
 
-```text
-数据收集层：稳定、保守、少假设、长期积累
-后处理层：激进、可变、可实验、持续升级
-```
+这样未来可以用更好的方法重新处理。
 
-你可以今天用简单规则抽事件，明天换成 FinBERT，后天换成金融 LLM，再之后换成多模态模型。只要原始数据收集层干净，后处理方法可以无限迭代。
+## 5. 时间账本
 
-### 3.1 架构图
+时间账本是整个系统最重要的部分。
 
-```text
-                         +--------------------+
-                         | Source Registry    |
-                         | 数据源清单/频率/授权 |
-                         +---------+----------+
-                                   |
-                                   v
-+-----------+     +-------------------------------+     +------------------+
-| Scheduler | --> | Crawlers / Connectors          | --> | Crawl Ledger     |
-| 定时任务    |     | 行情/公告/新闻/政策/宏观/天气     |     | 每次请求留痕       |
-+-----------+     +-------------------------------+     +------------------+
-                                   |
-                                   v
-                         +--------------------+
-                         | Raw Data Lake      |
-                         | append-only 原文保存 |
-                         +---------+----------+
-                                   |
-                                   v
-                         +--------------------+
-                         | Minimal Normalizer |
-                         | 最小标准化/不做语义判断 |
-                         +---------+----------+
-                                   |
-                                   v
-             +---------------------+---------------------+
-             |                                           |
-             v                                           v
-   +--------------------+                      +--------------------+
-   | Structured Tables  |                      | Text Documents     |
-   | 行情/宏观/商品       |                      | 新闻/公告/政策/舆情   |
-   +---------+----------+                      +---------+----------+
-             |                                           |
-             v                                           v
-   +--------------------+                      +--------------------+
-   | Collection Vault   |                      | Collection Manifest|
-   | 采集层稳定资产       |                      | 数据版本/血缘/质量     |
-   +---------+----------+                      +---------+----------+
-             |                                           |
-             +---------------------+---------------------+
-                                   |
-                                   v
-                         +--------------------+
-                         | Post-processing    |
-                         | 可替换研究管线       |
-                         +---------+----------+
-                                   |
-                                   v
-   +--------------------+                      +--------------------+
-   | Entity Master      | <------------------- | LLM Event Extractor |
-   | 股票/公司/行业/商品   |                      | 事件/情绪/风险/主题    |
-   +---------+----------+                      +---------+----------+
-             |                                           |
-             +---------------------+---------------------+
-                                   v
-                         +--------------------+
-                         | Event-Hypergraph   |
-                         | 事件/实体/超边       |
-                         +---------+----------+
-                                   |
-                                   v
-                         +--------------------+
-                         | PIT Feature Store  |
-                         | date x instrument  |
-                         +---------+----------+
-                                   |
-                                   v
-                         +--------------------+
-                         | Qlib / Models      |
-                         | 训练/回测/模拟交易    |
-                         +--------------------+
-```
-
-## 4. 第一优先级：时间账本
-
-### 4.1 每条数据必须有 8 个时间
-
-建议所有原始数据都尽量记录：
+### 5.1 每条数据至少记录 8 个时间
 
 ```text
-source_event_time    事件实际发生时间
+source_event_time    事件实际发生时间，若来源提供
 source_publish_time  来源声称的发布时间
 source_update_time   来源声称的更新时间
-crawl_start_time     你的爬虫开始请求时间
-crawl_end_time       你的爬虫拿到响应时间
-first_seen_at        你的系统第一次看到该内容的时间
-visible_time         你允许模型使用该内容的最早时间
-stored_at            写入数据库/对象存储时间
+crawl_start_time     爬虫开始请求时间
+crawl_end_time       爬虫拿到响应时间
+first_seen_at        系统第一次看到该 item 的时间
+stored_at            写入本地存储时间
+manifest_time        写入每日 manifest 的时间
 ```
 
-其中最关键的是：
+如果来源没有某些时间字段，就留空，不要猜。
+
+### 5.2 first_seen_at 是硬事实
+
+`first_seen_at` 的含义：
 
 ```text
+我的系统第一次看到这条内容的时间。
+```
+
+它不等于来源发布时间。
+
+例子：
+
+```text
+某公告 source_publish_time = 2026-04-24 18:00
+你的爬虫 first_seen_at = 2026-04-24 20:05
+```
+
+那么对你的数据系统来说，它最早只能证明：
+
+```text
+2026-04-24 20:05 之后我见过这条公告。
+```
+
+### 5.3 补采数据不能伪装成实时数据
+
+如果爬虫故障，第二天补采前一天数据，必须记录：
+
+```text
+source_publish_time = 来源原始发布时间
+first_seen_at = 你补采到的时间
+is_backfilled = true
+backfill_reason = crawler_failure / manual_repair / source_delay
+```
+
+后处理层可以决定是否使用，但采集层不能篡改 first_seen_at。
+
+### 5.4 时间统一规范
+
+建议内部统一：
+
+```text
+ISO 8601
+Asia/Shanghai
+同时保存 UTC 可选
+```
+
+字段示例：
+
+```text
+2026-04-24T20:05:31+08:00
+```
+
+对于海外市场和全球新闻：
+
+```text
+保留 source timezone；
+同时转换成 Asia/Shanghai；
+不要丢失原始字符串。
+```
+
+## 6. 数据源分层
+
+不要一开始追求“所有信息”。先按优先级做。
+
+### 6.1 P0：第一天就值得采集
+
+| 数据源类别 | 价值 | 采集频率 | 说明 |
+| --- | --- | --- | --- |
+| A 股行情快照 | 基础市场状态 | 1-5 分钟/盘后 | 先做快照和日线 |
+| 上市公司公告 | 公司级事件 | 5-15 分钟 | 巨潮、交易所 |
+| 交易所/监管信息 | 规则和监管冲击 | 15-30 分钟 | 证监会、交易所 |
+| 政策/部委新闻 | A 股政策驱动 | 30-60 分钟 | 政府网、央行、发改委等 |
+| 商品期货/大宗价格 | 周期行业外部变量 | 1-5 分钟/盘后 | 国内期货和国际商品 |
+| 全球市场指标 | 外部风险偏好 | 5-30 分钟 | 美股、美元、美债、VIX |
+| GDELT/全球新闻 | 地缘、灾害、国际事件 | 15-60 分钟 | 适合个人低成本起步 |
+
+### 6.2 P1：稳定后再接入
+
+| 数据源类别 | 价值 | 难点 |
+| --- | --- | --- |
+| 财经新闻/RSS | 新闻事件 | 授权、去重、正文版权 |
+| 舆情平台公开数据 | 情绪和热度 | 合规、反爬、噪声 |
+| 融资融券/北向/龙虎榜 | 资金行为 | 来源稳定性和披露延迟 |
+| 基金持仓 | 机构拥挤 | 季度披露滞后 |
+| 行业/概念成分 | 关系先验 | 历史版本和事后归因 |
+| 天气/灾害 | 气候冲击 | 地理映射 |
+
+### 6.3 P2：长期/付费/高难
+
+| 数据源类别 | 价值 | 为什么后做 |
+| --- | --- | --- |
+| Level-2 行情 | 高频微观结构 | 成本高，个人不必先做 |
+| 全量新闻全文 | 更完整事件覆盖 | 授权和版权复杂 |
+| 全网社交媒体 | 舆情覆盖 | 合规和清洗难 |
+| 研报全文/电话会纪要 | 机构观点 | 版权和数据成本 |
+| 供应链数据库 | 事件传导 | 数据贵，维护重 |
+| 另类数据/卫星/遥感 | 非公开视角 | 工程成本高 |
+
+## 7. 具体数据源清单
+
+实际使用前要逐个确认接口稳定性、授权、频率限制和服务条款。
+
+### 7.1 A 股行情
+
+可选来源：
+
+- AkShare。
+- Tushare Pro。
+- BaoStock。
+- 券商 API。
+- 付费数据商。
+
+第一阶段建议采集字段：
+
+```text
+instrument
+exchange
+name
+snapshot_time
+last_price
+open
+high
+low
+prev_close
+volume
+amount
+turnover
+limit_up
+limit_down
+halt_status
+source_raw_payload
 first_seen_at
-visible_time
+content_hash
 ```
 
-### 4.2 first_seen_at 和 visible_time 的区别
+注意：
 
-`first_seen_at`：
+- 免费接口不保证稳定。
+- 字段含义可能变。
+- 要保留原始 payload。
+- 行情快照缺失要记录，不要静默跳过。
+- 日线数据和快照数据分开保存。
+
+### 7.2 上市公司公告
+
+优先采集：
+
+- 巨潮资讯网。
+- 上交所信息披露。
+- 深交所信息披露。
+- 北交所信息披露。
+
+采集字段：
 
 ```text
-你的系统第一次采集到这条信息的时间。
+announcement_id
+source
+security_code
+security_name
+title
+category
+source_publish_time
+source_url
+pdf_url
+html_url
+download_time
+first_seen_at
+raw_file_path
+text_file_path_optional
+content_hash
+status
 ```
 
-`visible_time`：
+采集要求：
 
-```text
-模型可以使用这条信息的时间。
-```
+- PDF 原文必须保存。
+- 页面列表原始响应必须保存。
+- 附件必须保存。
+- 更正公告作为新 item。
+- 公告日期、披露时间、下载时间分开。
 
-有些数据采集到后不能立即用：
+### 7.3 政策和监管
 
-- PDF 公告需要解析。
-- 新闻需要去重。
-- LLM 需要抽取事件。
-- 宏观数据需要确认发布日期。
-- 盘中消息可能只能用于盘后模型。
+建议源：
 
-所以可以定义：
+- 中国政府网。
+- 中国证监会。
+- 上海证券交易所。
+- 深圳证券交易所。
+- 北京证券交易所。
+- 中国人民银行。
+- 国家统计局。
+- 国家发改委。
+- 工信部。
+- 财政部。
+- 商务部。
+- 生态环境部。
+- 国家能源局。
+- 农业农村部。
 
-```text
-visible_time = max(first_seen_at, parse_completed_at, source_publish_time)
-```
-
-如果你做盘后策略，还可以更严格：
-
-```text
-visible_trade_date = next_decision_cut_after(visible_time)
-```
-
-### 4.3 决策切点
-
-建议先固定几个决策切点：
-
-```text
-09:20  盘前
-11:35  午盘后
-15:10  收盘后
-20:00  晚间公告/新闻后
-23:30  海外市场/夜间事件后
-```
-
-第一阶段只做一个：
-
-```text
-每天 20:00 生成 T 日特征，预测 T+1 到 T+5
-```
-
-这样最干净。
-
-### 4.4 永远不要覆盖历史
-
-如果一条新闻后续更新，不要覆盖原记录。
-
-应该新增版本：
+采集字段：
 
 ```text
 doc_id
-version_id
+source_department
+title
+doc_no
+category
+source_publish_time
+source_update_time
+url
+raw_html_path
+attachment_paths
 first_seen_at
 content_hash
-raw_content
 ```
 
-如果宏观数据修订，也新增版本：
+注意：
+
+- 政策页面经常更新，要版本化。
+- 附件比网页正文更重要。
+- 不要只保存标题。
+
+### 7.4 新闻和全球事件
+
+第一阶段建议先用：
+
+- GDELT。
+- 有 RSS 的公开财经新闻源。
+- 有公开列表页的监管/交易所新闻。
+
+采集字段：
+
+```text
+url
+canonical_url
+title
+summary
+source_name
+author
+source_publish_time
+source_update_time
+language
+country
+raw_html_path
+raw_api_payload_path
+first_seen_at
+content_hash
+dedup_hash
+```
+
+版权策略：
+
+- 能合法保存全文时保存全文。
+- 不确定版权时保存 URL、标题、摘要、哈希和元数据。
+- 不传播受版权保护的全文库。
+
+### 7.5 商品期货和大宗商品
+
+国内源：
+
+- 上海期货交易所。
+- 上海国际能源交易中心。
+- 大连商品交易所。
+- 郑州商品交易所。
+- 广州期货交易所。
+- 中国金融期货交易所。
+
+国际源可根据接口条件接入：
+
+- 原油。
+- 黄金。
+- 铜。
+- 美元指数。
+- 美债收益率。
+- VIX。
+
+采集字段：
+
+```text
+symbol
+exchange
+contract
+snapshot_time
+last_price
+open
+high
+low
+settlement
+prev_settlement
+volume
+open_interest
+source_payload
+first_seen_at
+content_hash
+```
+
+注意：
+
+- 主力合约切换要保留规则和当时主力。
+- 夜盘和日盘时间要分开。
+- 国内期货节假日和 A 股不同。
+
+### 7.6 宏观数据和经济日历
+
+建议采集两类：
+
+```text
+发布日历
+实际发布值
+```
+
+来源：
+
+- 国家统计局。
+- 国家数据。
+- 中国人民银行。
+- 海关总署。
+- 财政部。
+- 发改委。
+- 交易所/财经日历公开源。
+
+采集字段：
 
 ```text
 indicator_id
+indicator_name
 period
-value
-release_time
-revision_no
+source_publish_time
 first_seen_at
-```
-
-训练时按：
-
-```text
-first_seen_at <= cutoff_time
-```
-
-选择可用版本。
-
-## 5. 数据源分层
-
-### 5.1 P0：必须先做的数据
-
-P0 是低成本、高价值、个人可以启动的数据。
-
-| 数据 | 用途 | 频率 | 备注 |
-| --- | --- | --- | --- |
-| A 股日线/分钟行情 | 标签、价格因子、成交量 | 1-5 分钟/盘后 | 先做 1 分钟或 5 分钟即可 |
-| 股票基础信息 | instrument master | 每日 | 上市、退市、停牌、名称变更 |
-| 官方公告 | 公司事件 | 5-15 分钟 | 巨潮、交易所、北交所 |
-| 交易所/监管新闻 | 政策/监管事件 | 15-60 分钟 | 证监会、交易所 |
-| 重要部委政策 | 政策事件 | 15-60 分钟 | 国务院、发改委、工信部、财政部、央行 |
-| 主要商品期货 | 商品暴露 | 1-5 分钟/盘后 | 原油、铜、铝、煤、锂、黄金等 |
-| 全球市场指标 | 外部风险 | 5-60 分钟 | 美股指数、美债、美元、VIX、原油、黄金 |
-| GDELT/国际新闻事件 | 全球事件 | 15-60 分钟 | 地缘、战争、灾害、政策 |
-| 财经新闻 RSS/公开源 | 新闻事件 | 5-15 分钟 | 遵守授权和 robots |
-| 天气/灾害 | 气候冲击 | 1-6 小时 | 天气、火灾、洪水、台风 |
-
-### 5.2 P1：第二阶段数据
-
-| 数据 | 用途 | 难点 |
-| --- | --- | --- |
-| 社交媒体舆情 | 情绪和关注度 | 合规、反爬、噪声 |
-| 股吧/论坛/雪球 | 个股热度 | 授权、噪声、重复 |
-| 研报标题/摘要 | 机构观点 | 版权和数据源 |
-| 基金持仓 | 资金拥挤 | 披露滞后 |
-| 龙虎榜 | 短线资金 | 适合短周期 |
-| 融资融券 | 杠杆情绪 | 日频即可 |
-| 北向资金 | 外资流 | 日频/分钟级看数据源 |
-| 行业产业链 | 事件传导 | 需要人工维护/付费源 |
-| 概念题材 | 主题超图 | 历史版本难 |
-
-### 5.3 P2：长期/付费/高难数据
-
-| 数据 | 用途 | 为什么后做 |
-| --- | --- | --- |
-| Level-2 行情 | 高频微观结构 | 数据贵，策略复杂 |
-| 全网新闻全文 | 全局事件覆盖 | 授权和版权复杂 |
-| 全量社交媒体 | 情绪舆情 | 合规和噪声难 |
-| 电话会纪要 | 基本面预期 | 授权昂贵 |
-| 供应链数据库 | 传导关系 | 数据贵且需维护 |
-| 卫星/遥感 | 另类数据 | 工程成本高 |
-| 企业招聘/招投标 | 经营变化 | 清洗难 |
-
-## 6. 推荐数据源清单
-
-下面是第一版源清单。实际落地时需要逐个确认接口稳定性、授权、访问频率和服务条款。
-
-### 6.1 A 股行情
-
-可选路线：
-
-| 路线 | 优点 | 缺点 | 建议 |
-| --- | --- | --- | --- |
-| AkShare | 免费、覆盖广、上手快 | 多为非官方接口，稳定性需监控 | 个人研究可先用 |
-| Tushare Pro | 接口规范、数据丰富 | 需要 token，部分权限积分/付费 | 中期可用 |
-| BaoStock | 免费、适合日频历史 | 实时能力有限 | 可做补充 |
-| 券商/数据商 API | 授权更清晰、实时性好 | 费用/开户/接口限制 | 实盘前优先 |
-| 交易所授权行情 | 最正规 | 个人成本高 | 长期再考虑 |
-
-第一阶段建议：
-
-```text
-AkShare/Tushare 获取盘中快照和盘后行情
-同时保存每次请求的原始结果、时间戳、哈希
-```
-
-注意：
-
-- 免费接口可能失效。
-- 字段含义可能变化。
-- 不要依赖单一来源。
-- 行情数据要和交易日历、停牌、涨跌停对齐。
-
-### 6.2 官方公告
-
-优先级很高。
-
-建议覆盖：
-
-- 巨潮资讯网
-- 上海证券交易所信息披露
-- 深圳证券交易所信息披露
-- 北京证券交易所信息披露
-
-公告是个人最应该采集的数据之一：
-
-- 官方来源。
-- 时间戳明确。
-- 公司级事件密度高。
-- 可通过 LLM 抽取结构化事件。
-- 对 A 股影响直接。
-
-需要采集：
-
-```text
-公告标题
-证券代码
-证券简称
-公告类别
-公告日期
-披露时间
-PDF/HTML 原文
-附件
-下载时间
+value
+unit
+previous_value
+revision_flag
+raw_payload_path
 content_hash
 ```
 
 注意：
 
-- 公告日期不一定等于市场可见时间。
-- 晚间公告一般用于下一交易日。
-- PDF 解析要保存解析版本。
-- 更正公告要作为新事件处理。
+- 初值和修订值分版本保存。
+- 发布日和统计期分开。
+- 不要用后来的修订值覆盖初值。
 
-### 6.3 政策和监管
+### 7.7 天气、灾害和地理事件
 
-A 股政策驱动明显，政策数据必须做。
+可选来源：
 
-建议覆盖：
+- Open-Meteo。
+- NASA FIRMS。
+- NOAA。
+- 气象部门公开信息。
+- 台风路径公开数据。
+- 灾害预警公开数据。
 
-| 来源 | 用途 |
-| --- | --- |
-| 中国政府网 | 国务院政策、常务会议、重要文件 |
-| 中国证监会 | 资本市场监管、处罚、政策 |
-| 上交所/深交所/北交所 | 市场制度、监管动态 |
-| 中国人民银行 | 货币政策、利率、社融、M2 |
-| 国家统计局 | GDP、CPI、PPI、PMI、工业、消费 |
-| 国家发改委 | 产业政策、价格、能源 |
-| 工信部 | 制造业、科技、产业政策 |
-| 财政部 | 财政政策、税收、专项资金 |
-| 商务部 | 外贸、消费、制裁、出口管制 |
-| 生态环境部 | 环保、碳、限产 |
-| 国家能源局 | 电力、煤炭、油气、新能源 |
-| 农业农村部 | 农产品、种业、养殖 |
-
-政策事件要抽取：
+采集字段：
 
 ```text
-政策主体
-政策对象
-政策方向
-影响行业
-支持/限制/监管/处罚
-力度
-时间范围
-地理范围
+source
+region
+lat
+lon
+event_or_observation_time
+source_publish_time
+first_seen_at
+event_type
+severity_raw
+raw_payload_path
+content_hash
 ```
 
-### 6.4 新闻和全球事件
+采集层只保存灾害事实，不判断影响哪些股票。
 
-#### GDELT
+### 7.8 舆情和公开热度
 
-GDELT 是很适合个人起步的全球事件源：
+舆情数据有价值，但合规和噪声问题大。
 
-- 覆盖全球新闻。
-- 有事件、地理、主题、情绪等结构化字段。
-- 可按关键词、国家、主题查询。
-- 适合做地缘风险、战争冲突、灾害、国际政策、全球舆情。
+建议原则：
 
-建议采集：
+- 优先官方开放 API。
+- 优先公开榜单和指数。
+- 控制频率。
+- 不绕过登录。
+- 不绕过验证码。
+- 不采集私人信息。
+
+采集字段：
 
 ```text
-China related
-Asia related
-geopolitical conflict
-sanction
-trade war
-energy
-semiconductor
-climate disaster
-commodity
-supply chain
+platform
+topic
+keyword
+rank
+heat_value
+snapshot_time
+url
+first_seen_at
+raw_payload_path
+content_hash
 ```
 
-GDELT 不是直接的 A 股数据，但适合做外部事件层。
+第一阶段可以只采集主题热度，不采集大量用户文本。
 
-#### 财经新闻
+### 7.9 手工维护数据也要版本化
 
-建议优先采集有 RSS 或公开列表页的来源。不要绕过付费墙，不要高频抓取受保护内容。
+有些数据个人很难自动采集，例如：
 
-第一阶段可采集：
+- 产业链关系。
+- 商品暴露关系。
+- 公司产品。
+- 概念别名。
+- 公司别名。
+
+可以手工维护，但必须像爬虫数据一样留痕：
 
 ```text
-标题
-摘要
-发布时间
-URL
-来源
-正文片段/公开正文
-关键词
+manual_dataset_name
+version
+valid_from
+valid_to
+created_at
+updated_at
+source_reference
+editor
+change_reason
+content_hash
 ```
 
-如果版权不确定，可以只保存：
+不要直接改 Excel 覆盖旧版本。
 
-```text
-URL + 标题 + 摘要 + 哈希 + 抽取出的结构化事件
-```
+## 8. 核心表设计
 
-全文只用于本地研究且不传播，也要遵守来源条款。
+本节只设计采集层表，不包含事件、超图、特征、模型表。
 
-### 6.5 商品期货和大宗商品
-
-A 股很多行业受商品价格影响：
-
-- 石油
-- 天然气
-- 煤炭
-- 铜
-- 铝
-- 锌
-- 镍
-- 锂
-- 铁矿石
-- 螺纹钢
-- 黄金
-- 白银
-- 农产品
-
-建议覆盖：
-
-| 市场 | 用途 |
-| --- | --- |
-| 上海期货交易所 | 有色、贵金属、能源化工 |
-| 上海国际能源交易中心 | 原油、低硫燃料油等 |
-| 大连商品交易所 | 农产品、化工、铁矿等 |
-| 郑州商品交易所 | 农产品、能源化工等 |
-| 广州期货交易所 | 新能源金属、工业硅等 |
-| 中国金融期货交易所 | 股指、国债、期权 |
-| 国际市场 | WTI、Brent、LME、COMEX 等 |
-
-个人可先做：
-
-```text
-主力合约日线
-主力合约 1min/5min 快照
-夜盘涨跌
-近月/远月价差
-期限结构
-波动率
-```
-
-商品特征进入股票时，要区分：
-
-```text
-生产商受益
-消费商受损
-库存高低
-价格传导能力
-行业竞争格局
-```
-
-### 6.6 宏观数据
-
-宏观不是高频 alpha，但对市场状态很重要。
-
-建议采集：
-
-```text
-GDP
-CPI
-PPI
-PMI
-工业增加值
-社零
-固定资产投资
-进出口
-社融
-M2
-利率
-汇率
-财政收支
-地方债
-房地产销售
-```
-
-关键不是数值本身，而是：
-
-```text
-发布时间
-市场预期
-实际值
-前值
-修订值
-超预期程度
-```
-
-如果拿不到市场一致预期，可以先做：
-
-```text
-actual - previous
-actual percentile
-rolling surprise proxy
-```
-
-### 6.7 天气和灾害
-
-气候和自然灾害影响：
-
-- 农业
-- 电力
-- 煤炭
-- 水泥
-- 交通
-- 物流
-- 保险
-- 食品
-- 旅游
-- 港口
-
-可用源：
-
-- Open-Meteo
-- NOAA
-- NASA FIRMS 火点/火灾
-- 中国天气/气象部门公开信息
-- 台风路径和灾害公告
-
-事件抽取：
-
-```text
-灾害类型
-地区
-强度
-持续时间
-影响行业
-影响公司所在地/产能
-```
-
-### 6.8 舆情数据
-
-舆情有价值，但一定要谨慎。
-
-可采集：
-
-```text
-热度
-提及量
-情绪
-分歧度
-转发/评论/点赞
-关键词共现
-主题聚类
-```
-
-建议优先使用：
-
-- 官方开放 API
-- 授权数据源
-- 低频公开页面
-- 搜索指数/热榜类公开数据
-
-不建议：
-
-- 绕过登录权限
-- 绕过反爬机制
-- 高频抓取用户内容
-- 抓取并传播大量全文
-
-舆情最容易带来噪声和合规问题，建议 P1 阶段再做。
-
-## 7. “从今天开始采集”的核心表设计
-
-这一节要明确分层：
-
-```text
-7.1 - 7.6：数据收集层/主数据层
-  目标：保存事实、来源、时间、版本、原始内容。
-  原则：尽量稳定，长期不变。
-
-7.7 - 7.11：后处理/研究层
-  目标：保存事件、实体链接、超图、特征、标签等派生产物。
-  原则：可以反复重算，必须带版本。
-```
-
-最重要的边界：
-
-> 采集层表不能依赖后处理层表；后处理层表可以随时删除重建，但采集层表不能丢。
-
-### 7.1 source_registry
-
-记录所有数据源。
+### 8.1 source_registry
 
 ```sql
 source_id
 source_name
 source_type
 base_url
+official_level
 license_type
 terms_url
 robots_url
-allowed_frequency
+auth_type
+rate_limit_rule
+expected_update_frequency
 priority
 enabled
-owner
 notes
 created_at
 updated_at
 ```
 
-### 7.2 crawl_run
-
-每次爬虫运行都留痕。
+### 8.2 crawl_run
 
 ```sql
 run_id
@@ -968,52 +735,100 @@ request_count
 success_count
 error_count
 new_item_count
+updated_item_count
 duplicate_count
 rate_limit_hit
 error_message
 code_git_commit
 ```
 
-### 7.3 raw_document
+### 8.3 raw_item
 
-所有新闻、公告、政策、网页、PDF 的原始记录。
+所有采集到的 item 都要进这张统一索引表。
 
 ```sql
-doc_id
+item_id
 source_id
+source_item_id
 source_url
 canonical_url
+item_type
 title
-author
 source_publish_time
 source_update_time
-crawl_time
+crawl_run_id
+crawl_start_time
+crawl_end_time
 first_seen_at
-visible_time
-language
-content_type
+stored_at
 raw_storage_path
-text_storage_path
+raw_mime_type
+raw_size_bytes
 content_hash
 dedup_hash
-status_code
-parse_status
-parse_version
-license_note
+is_backfilled
+backfill_reason
+status
 ```
 
-### 7.4 market_snapshot
+`item_type` 示例：
 
-行情快照。
+```text
+market_snapshot
+announcement
+policy_doc
+news_article
+macro_release
+commodity_snapshot
+weather_observation
+sentiment_snapshot
+manual_dataset
+```
+
+### 8.4 raw_file
+
+一个 item 可能有多个文件。
+
+```sql
+file_id
+item_id
+source_id
+file_role
+file_url
+storage_path
+mime_type
+size_bytes
+content_hash
+download_start_time
+download_end_time
+first_seen_at
+status
+```
+
+`file_role` 示例：
+
+```text
+html
+pdf
+attachment
+api_json
+csv
+image
+text_extracted_optional
+```
+
+### 8.5 market_snapshot_raw
+
+行情类数据可以有专门快照表，但仍然必须保留 raw payload。
 
 ```sql
 snapshot_id
+item_id
 source_id
 instrument
 exchange
 source_timestamp
 first_seen_at
-visible_time
 last_price
 open
 high
@@ -1021,8 +836,6 @@ low
 prev_close
 volume
 amount
-bid1
-ask1
 limit_up
 limit_down
 halt_status
@@ -1030,365 +843,252 @@ raw_storage_path
 content_hash
 ```
 
-### 7.5 instrument_master
+### 8.6 source_item_state
 
-股票主数据。
+用于识别更新和重复。
 
 ```sql
-instrument
-company_id
-exchange
-name
-list_date
-delist_date
-board
-industry_sw_l1
-industry_sw_l2
-industry_sw_l3
-concepts
-region
-is_st
+source_id
+source_item_key
+first_item_id
+latest_item_id
+first_seen_at
+latest_seen_at
+latest_content_hash
+seen_count
+update_count
+```
+
+### 8.7 collection_manifest
+
+每天生成一次。
+
+```sql
+manifest_id
+manifest_date
+generated_at
+source_count
+run_count
+raw_item_count
+new_item_count
+updated_item_count
+duplicate_count
+error_count
+manifest_path
+manifest_hash
+```
+
+manifest 文件中应包含：
+
+```json
+{
+  "date": "2026-04-24",
+  "generated_at": "2026-04-24T23:50:00+08:00",
+  "sources": [
+    {
+      "source_id": "cninfo",
+      "runs": 96,
+      "new_items": 120,
+      "errors": 0,
+      "latest_success_time": "2026-04-24T23:45:00+08:00"
+    }
+  ],
+  "raw_files": [
+    {
+      "item_id": "xxx",
+      "path": "collection/raw/source=cninfo/dt=2026-04-24/xxx.pdf",
+      "content_hash": "sha256:..."
+    }
+  ]
+}
+```
+
+### 8.8 source_health
+
+```sql
+source_id
+check_time
 status
-first_seen_at
-valid_from
-valid_to
-source_id
+freshness_minutes
+last_success_time
+last_error_time
+success_rate_24h
+new_items_24h
+parse_optional_failure_rate
+notes
 ```
 
-注意：行业、概念、ST 状态都要有历史版本。
+## 9. 存储设计
 
-### 7.6 entity_master
+### 9.1 推荐个人技术栈
 
-实体库。
-
-```sql
-entity_id
-entity_type
-canonical_name
-aliases
-external_ids
-description
-first_seen_at
-valid_from
-valid_to
-source_id
-```
-
-实体类型：
+简单起步：
 
 ```text
-stock
-company
-industry
-concept
-commodity
-country
-region
-policy_body
-person
-fund
-product
-technology
-event_topic
+元数据：SQLite / DuckDB
+结构化快照：Parquet
+原始文件：本地文件系统
+调度：Windows Task Scheduler / cron / APScheduler
+日志：普通文件 + JSONL
+备份：移动硬盘 + 云盘/对象存储
 ```
 
-### 7.7 event_table
-
-LLM/规则抽取后的事件。
-
-从这里开始属于**后处理层**，不是原始采集层。`event_table` 可以随着事件分类体系、LLM、prompt、抽取规则变化而重算，所以必须保存抽取器版本。
-
-```sql
-event_id
-doc_id
-event_time
-publish_time
-first_seen_at
-visible_time
-event_type
-event_subtype
-title
-summary
-sentiment
-risk_score
-novelty
-uncertainty
-importance
-confidence
-extractor_name
-extractor_version
-prompt_version
-model_name
-created_at
-```
-
-### 7.8 event_entity_link
-
-事件和实体的关系。
-
-这是后处理层表。实体链接方法未来一定会升级，所以不要把它当成不可变事实；它只是在某个版本方法下的解释结果。
-
-```sql
-event_id
-entity_id
-entity_type
-relation_type
-impact_direction
-impact_strength
-confidence
-evidence
-created_at
-```
-
-关系类型：
+长期升级：
 
 ```text
-mentioned
-subject
-object
-affected_positive
-affected_negative
-supplier
-customer
-competitor
-substitute
-policy_target
-geography_exposure
-commodity_exposure
-sentiment_target
+元数据：PostgreSQL
+分析：DuckDB
+对象存储：MinIO / S3 兼容存储
+调度：Prefect / Dagster / Airflow
+监控：Prometheus / Grafana 可选
+数据版本：DVC / lakeFS 可选
 ```
 
-### 7.9 hyperedge_table
-
-超图关系。
-
-这是后处理层表。超图关系非常有研究价值，但它不是原始事实本身，而是对原始数据和主数据关系的一种建模方式。未来可能有更好的超图构建、权重学习、动态关系发现方法，因此必须版本化。
-
-```sql
-hyperedge_id
-hyperedge_type
-timestamp
-first_seen_at
-visible_time
-node_ids
-node_types
-weight
-direction
-decay_half_life
-source_type
-source_id
-confidence
-version
-```
-
-超边类型：
-
-```text
-industry_membership
-concept_membership
-supply_chain_group
-commodity_exposure_group
-policy_impact_group
-event_impact_group
-fund_holding_group
-geography_group
-sentiment_topic_group
-dynamic_comovement_group
-macro_sensitivity_group
-```
-
-### 7.10 feature_snapshot
-
-每天生成的模型特征。
-
-这是后处理层表。特征永远是可替换的，不要把特征当成数据资产的核心；真正的核心是能重新生成特征的原始数据、时间账本和处理版本。
-
-```sql
-feature_date
-cutoff_time
-instrument
-feature_set_name
-feature_version
-features_path
-source_max_visible_time
-generation_time
-code_git_commit
-data_manifest_hash
-```
-
-不要只保存最终特征值，还要保存：
-
-```text
-这批特征使用了哪些原始数据版本。
-```
-
-### 7.11 label_table
-
-标签也必须从今天开始生成。
-
-标签比特征更稳定，但仍然属于研究层产物，因为不同策略会定义不同收益区间、交易价格、复权方式、行业中性方式和成本假设。标签也要版本化。
-
-```sql
-label_date
-instrument
-label_name
-horizon
-start_price_time
-end_price_time
-return
-excess_return
-industry_neutral_return
-created_at
-```
-
-## 8. 存储方案
-
-### 8.1 个人推荐架构
-
-不建议一开始上很重的分布式系统。
-
-个人起步推荐：
-
-```text
-PostgreSQL / DuckDB / SQLite 负责元数据
-Parquet 负责结构化大表
-本地文件系统或 MinIO 负责原文/PDF/HTML
-Git 负责代码版本
-DVC 或 lakeFS 可选，负责数据版本
-```
-
-如果你想简单：
-
-```text
-metadata: SQLite 或 DuckDB
-tables: Parquet
-raw files: data/raw/
-features: data/features/
-```
-
-如果你想更长期：
-
-```text
-metadata: PostgreSQL
-time series: TimescaleDB 可选
-object storage: MinIO
-analytics: DuckDB
-features: Parquet + Qlib
-workflow: Prefect / Dagster / Airflow
-```
-
-### 8.2 目录结构
-
-建议：
-
-```text
-data_lake/
-  raw/
-    source=cninfo/
-      dt=2026-04-24/
-        *.json
-        *.pdf
-    source=gdelt/
-      dt=2026-04-24/
-        *.json
-    source=akshare_spot/
-      dt=2026-04-24/
-        *.json
-  normalized/
-    documents/
-    market_snapshots/
-    announcements/
-    macro/
-    commodities/
-  collection_manifests/
-    dt=2026-04-24/
-      source_status.json
-      raw_file_manifest.json
-      crawl_quality_report.json
-  postprocess/
-    parser_runs/
-    extractor_runs/
-    entity_linking_runs/
-  events/
-    event_table/
-    event_entity_link/
-  graph/
-    entity_master/
-    hyperedges/
-  features/
-    feature_set=event_v1/
-    feature_set=hypergraph_v1/
-  labels/
-  manifests/
-  logs/
-```
-
-更推荐从第一天就按“采集资产”和“后处理产物”分开：
+### 9.2 目录结构
 
 ```text
 data_lake/
   collection/
-    raw/              # 原始响应、PDF、HTML、JSON、CSV，永不覆盖
-    normalized_min/   # 最小标准化，只做字段和时间统一，不做语义判断
-    manifests/        # 每日采集清单、哈希、数据质量
-    metadata/         # source_registry、crawl_run、raw_document
-
-  derived/
-    parsed/           # 文本解析、PDF OCR、正文抽取
-    events/           # 事件抽取结果
-    entities/         # 实体识别和链接结果
-    graph/            # 图/超图关系
-    features/         # PIT 特征
-    labels/           # 标签
-    models/           # 模型和预测结果
+    registry/
+      source_registry.yaml
+    metadata/
+      crawl_run.parquet
+      raw_item.parquet
+      raw_file.parquet
+      source_item_state.parquet
+    raw/
+      source=cninfo/
+        dt=2026-04-24/
+          *.json
+          *.pdf
+      source=gdelt/
+        dt=2026-04-24/
+          *.json
+      source=ashare_snapshot/
+        dt=2026-04-24/
+          *.json
+    normalized_min/
+      market_snapshot_raw/
+      announcement_index/
+      policy_index/
+      macro_release_raw/
+      commodity_snapshot_raw/
+    manifests/
+      dt=2026-04-24/
+        collection_manifest.json
+        raw_file_manifest.json
+        source_health.json
+    logs/
+      crawler_name=cninfo/
+        dt=2026-04-24/
+          *.log
+    backups/
 ```
 
-判断一个文件应该放哪里：
+后处理层不放在这里，可以另建：
 
 ```text
-如果它是“当时看到的事实”，放 collection。
-如果它是“后来某个方法解释出来的结果”，放 derived。
+data_lake/derived/
 ```
 
-### 8.3 文件命名
+但这份文档不展开。
+
+### 9.3 文件命名
 
 ```text
-{source_id}_{crawl_time}_{content_hash}.{ext}
+{source_id}_{crawl_time}_{content_hash_prefix}.{ext}
 ```
 
-例如：
+示例：
 
 ```text
-cninfo_20260424T201530+0800_ab12cd34.pdf
+cninfo_20260424T200531+0800_ab12cd34.pdf
 gdelt_20260424T201500+0800_ef56aa22.json
+ashare_snapshot_20260424T093501+0800_91ac7820.json
 ```
 
-## 9. 爬虫和采集系统
+## 10. 采集器设计
 
-### 9.1 采集原则
-
-每个 crawler 必须做到：
+### 10.1 每个采集器必须具备
 
 ```text
-幂等
 限速
 重试
 超时
-日志
+幂等
+断点续采
+错误日志
 原始响应保存
 哈希去重
-异常报警
-不覆盖历史
+请求参数保存
+响应状态保存
+source health 更新
 ```
 
-### 9.2 推荐任务频率
+### 10.2 采集器类型
 
-第一阶段：
+```text
+API connector
+RSS connector
+web list crawler
+file downloader
+market snapshot collector
+manual dataset importer
+calendar collector
+```
+
+### 10.3 不同类型的采集策略
+
+API：
+
+```text
+保存 request params
+保存 raw JSON
+记录 rate limit
+记录分页 cursor
+```
+
+RSS：
+
+```text
+保存 feed XML
+保存 item URL
+保存 guid
+定期重新拉取，识别更新
+```
+
+网页列表：
+
+```text
+保存列表页 HTML
+保存详情页 HTML
+保存分页参数
+不要只保存详情页
+```
+
+PDF/附件：
+
+```text
+保存原始文件
+记录下载 URL
+记录 MIME type
+记录 content_hash
+```
+
+行情快照：
+
+```text
+保存完整 raw payload
+不要只保存标准字段
+快照频率稳定比极高频更重要
+```
+
+### 10.4 推荐采集频率
 
 | 数据 | 频率 |
 | --- | --- |
 | A 股盘中快照 | 1-5 分钟 |
-| A 股盘后日线 | 每日 16:00、20:00 |
+| A 股盘后日线 | 16:00、20:00 |
 | 公告 | 5-15 分钟 |
 | 交易所/监管新闻 | 15-30 分钟 |
 | 部委政策 | 30-60 分钟 |
@@ -1397,1015 +1097,458 @@ gdelt_20260424T201500+0800_ef56aa22.json
 | 商品期货 | 1-5 分钟/盘后 |
 | 全球市场 | 5-30 分钟 |
 | 天气灾害 | 1-6 小时 |
-| 宏观数据 | 每日/按日历 |
+| 宏观数据 | 按发布日历 + 每日兜底 |
 
-### 9.3 不同时间级别怎么对齐
+### 10.5 失败处理
 
-不要强行把所有数据对齐到秒级。
+失败不应该静默。
 
-建议统一成：
-
-```text
-raw_time: 原始时间
-visible_time: 可见时间
-decision_cut: 决策时间
-feature_date: 训练日期
-```
-
-例如：
+记录：
 
 ```text
-2026-04-24 21:15 采集到某政策新闻
-visible_time = 2026-04-24 21:15
-decision_cut = 2026-04-24 23:30
-feature_date = 2026-04-24
-用于预测 2026-04-27 或下一交易日
+source_id
+run_id
+error_type
+error_message
+http_status
+retry_count
+last_success_time
 ```
 
-### 9.4 断点和补采
+失败后：
 
-如果爬虫断了，后来补采历史数据，必须标记：
+- 短期重试。
+- 超过阈值告警。
+- 次日补采时标记 `is_backfilled=true`。
+
+## 11. 去重和版本化
+
+### 11.1 两种哈希
 
 ```text
-is_backfilled = true
-backfill_time = now()
+content_hash: 原始内容哈希，判断内容是否完全一致。
+dedup_hash: 规范化后的弱哈希，判断是否可能是同一条信息。
 ```
 
-训练时：
+例如新闻转载：
 
 ```text
-如果某数据 first_seen_at > cutoff_time，则不能用于该 cutoff_time 的训练样本。
+title + source_publish_time + canonical_url
 ```
 
-即使内容发布时间早，也不能使用，因为你的系统当时没看到。
+可以生成 dedup_hash。
 
-## 10. LLM 事件抽取
+### 11.2 更新不是覆盖
 
-### 10.1 LLM 的正确角色
-
-LLM 不应该直接预测股票涨跌。
-
-LLM 应该做：
+如果同一个 URL 内容变了：
 
 ```text
-文本清洗
-事件抽取
-实体识别
-实体链接候选
-情绪判断
-影响方向判断
-风险评分
-主题归类
-摘要
-证据句提取
+旧版本保留
+新版本新增 raw_item
+source_item_state 指向 latest_item_id
 ```
 
-然后把结构化结果交给量化模型。
+这样才能还原历史。
 
-### 10.2 事件 JSON Schema
+### 11.3 页面列表也要保存
 
-建议固定输出：
-
-```json
-{
-  "event_type": "policy",
-  "event_subtype": "industry_support",
-  "event_time": "2026-04-24T20:15:00+08:00",
-  "summary": "某部门发布支持新能源产业链政策",
-  "entities": [
-    {
-      "name": "新能源",
-      "entity_type": "industry",
-      "relation": "policy_target",
-      "impact_direction": "positive",
-      "impact_strength": 0.76,
-      "confidence": 0.82
-    }
-  ],
-  "sentiment": 0.68,
-  "risk_score": 0.12,
-  "novelty": 0.54,
-  "uncertainty": 0.31,
-  "importance": 0.72,
-  "evidence": [
-    "政策文件中提到..."
-  ]
-}
-```
-
-### 10.3 抽取质量控制
-
-每个事件都要有：
+很多数据源的列表页能证明：
 
 ```text
-confidence
-evidence
-extractor_version
-prompt_version
-model_name
+某个时间点这个公告/新闻已经出现在列表里。
 ```
 
-建议做三层校验：
+所以不要只保存详情页，列表页也要保存原始响应。
 
-1. JSON schema 校验。
-2. 实体库匹配校验。
-3. 规则校验，例如情绪和影响方向不能自相矛盾。
+## 12. 数据质量监控
 
-低置信事件不删除，打标：
-
-```text
-confidence < 0.5 -> low_confidence
-```
-
-训练时可以比较：
-
-```text
-all events
-high confidence only
-source reliable only
-```
-
-### 10.4 事件类型初版
-
-建议先覆盖：
-
-```text
-company_announcement
-earnings
-merger_acquisition
-shareholder_change
-buyback
-reduction
-regulatory_penalty
-policy_support
-policy_restriction
-industry_policy
-geopolitical_conflict
-sanction
-trade_policy
-commodity_price_shock
-climate_disaster
-macro_release
-fund_flow
-sentiment_spike
-technology_breakthrough
-supply_chain_disruption
-```
-
-## 11. 实体链接与 A 股映射
-
-### 11.1 为什么实体链接最重要
-
-新闻本身不能交易，股票代码才能交易。
-
-你需要把：
-
-```text
-新闻/政策/事件
-```
-
-映射到：
-
-```text
-股票
-行业
-概念
-商品
-地区
-供应链
-宏观暴露
-```
-
-### 11.2 实体链接流程
-
-```text
-文本实体识别
-  -> 别名匹配
-  -> 公司/股票候选
-  -> 行业/概念/产品扩展
-  -> LLM 或 reranker 消歧
-  -> 置信度打分
-  -> 人工抽查
-```
-
-### 11.3 别名库
-
-必须维护：
-
-```text
-股票简称
-公司全称
-曾用名
-品牌名
-产品名
-英文名
-控股股东
-子公司
-常见错别字
-行业别名
-概念别名
-商品别名
-```
-
-例子：
-
-```text
-“宁德”
-  -> 可能是 宁德时代
-  -> 也可能是福建宁德地区
-```
-
-所以要结合上下文消歧。
-
-## 12. 超图关系从第一天就要设计
-
-你前面提到超图关系，这里仍然是核心。
-
-### 12.1 从今天采集的数据如何生成超图
-
-普通图表达：
-
-```text
-公司 A -> 属于 -> 行业 X
-公司 A -> 使用 -> 商品 Y
-公司 A -> 位于 -> 地区 Z
-```
-
-超图表达：
-
-```text
-事件 E 同时影响 {行业 X, 商品 Y, 公司 A, 公司 B, 地区 Z}
-```
-
-你从今天起采集的数据，天然可以生成动态超边：
-
-```text
-同一事件影响的一组股票
-同一政策影响的一组行业
-同一商品价格冲击影响的一组公司
-同一舆情主题覆盖的一组股票
-同一自然灾害影响的一组地区公司
-同一国际事件影响的一组出口链企业
-```
-
-### 12.2 第一版超图不用复杂模型
-
-先做特征，不做神经网络：
-
-```text
-某股票所在事件超边的平均情绪
-某股票所在事件超边的最大风险
-某股票所在商品超边的商品涨跌
-某股票所在行业超边的新闻热度
-某股票所在概念超边的资金共振
-某股票所在供应链超边的上游冲击
-```
-
-这些都可以喂给 LightGBM。
-
-### 12.3 超图节点
-
-```text
-stock
-company
-industry
-concept
-commodity
-country
-region
-policy_body
-event
-topic
-fund
-macro_indicator
-```
-
-### 12.4 超图超边
-
-```text
-industry_membership
-concept_membership
-event_impact
-policy_impact
-commodity_exposure
-supply_chain
-region_exposure
-fund_holding
-sentiment_topic
-dynamic_comovement
-macro_sensitivity
-```
-
-### 12.5 超图特征例子
-
-```text
-hyper_event_sentiment_mean_1d
-hyper_event_risk_max_5d
-hyper_policy_support_sum_20d
-hyper_commodity_price_change_5d
-hyper_neighbor_return_mean_1d
-hyper_neighbor_volume_surprise_5d
-hyper_topic_heat_rank_3d
-hyper_supply_chain_shock_score_10d
-hyper_geopolitical_exposure_20d
-hyper_climate_disaster_exposure_20d
-```
-
-## 13. Point-in-Time 特征生成
-
-### 13.1 特征生成规则
-
-每次生成特征时必须传入：
-
-```text
-cutoff_time
-universe
-feature_version
-```
-
-并且所有输入数据满足：
-
-```text
-visible_time <= cutoff_time
-```
-
-### 13.2 特征不要回填
-
-如果今天才发现某股票属于某概念，不要把这个关系回填到过去训练。
-
-正确做法：
-
-```text
-relationship_first_seen_at = today
-```
-
-只有今天之后的样本可使用。
-
-### 13.3 特征 Manifest
-
-每批特征生成后保存 manifest：
-
-```json
-{
-  "feature_date": "2026-04-24",
-  "cutoff_time": "2026-04-24T20:00:00+08:00",
-  "feature_version": "event_hypergraph_v1",
-  "data_sources": [
-    {"source_id": "cninfo", "max_visible_time": "2026-04-24T19:58:00+08:00"},
-    {"source_id": "gdelt", "max_visible_time": "2026-04-24T19:45:00+08:00"}
-  ],
-  "code_git_commit": "abc123",
-  "row_count": 5200,
-  "feature_count": 120
-}
-```
-
-这样以后才能复盘。
-
-## 14. 训练和回测方案
-
-### 14.1 第一阶段模型
-
-先用：
-
-```text
-LightGBM
-Ridge
-ElasticNet
-Logistic ranker
-CatBoost 可选
-```
-
-不要急着上：
-
-```text
-Transformer
-GNN
-Hypergraph NN
-大型 MoE
-```
-
-原因：
-
-- 数据时间太短。
-- 复杂模型更容易过拟合。
-- 简单模型更适合验证数据是否有效。
-
-### 14.2 标签设计
-
-建议：
-
-```text
-label_1d: T+1 日收益
-label_5d: T+1 到 T+5 收益
-label_20d: T+1 到 T+20 收益
-```
-
-做横截面排序：
-
-```text
-每天预测股票相对收益排名
-```
-
-不建议预测：
-
-```text
-绝对价格
-明天一定涨/跌
-```
-
-### 14.3 训练窗口
-
-从今天起采集，初期建议：
-
-| 数据积累 | 训练方式 |
-| --- | --- |
-| 0-1 个月 | 不训练，只做数据质量和纸面因子 |
-| 1-3 个月 | 简单模型，小心验证 |
-| 3-6 个月 | expanding window 训练 |
-| 6-12 个月 | rolling + expanding 对比 |
-| 12 个月以上 | 市场状态分层和超图模型 |
-
-### 14.4 Walk-forward 流程
-
-```text
-每天 20:00 生成特征
-T+N 收益成为标签后写入 label_table
-每周/每月重新训练模型
-新模型先进入 paper trading
-达到指标后再替换生产模型
-```
-
-### 14.5 消融实验
-
-必须做：
-
-```text
-Baseline: price/volume only
-Baseline + announcement events
-Baseline + policy events
-Baseline + global events
-Baseline + commodity features
-Baseline + hypergraph features
-Baseline + sentiment features
-```
-
-判断：
-
-```text
-Rank IC 是否提升
-ICIR 是否提升
-top-bottom 收益是否提升
-换手是否可接受
-回撤是否下降
-行业/市值暴露是否可控
-```
-
-## 15. 反泄漏制度
-
-这是整个项目成败关键。
-
-### 15.1 硬规则
-
-训练样本在 `cutoff_time` 只能使用：
-
-```text
-visible_time <= cutoff_time
-first_seen_at <= cutoff_time
-relationship_first_seen_at <= cutoff_time
-feature_generation_time <= cutoff_time 之后生成但输入数据不能越界
-```
-
-### 15.2 禁止事项
-
-禁止：
-
-```text
-用当前概念板块回填过去
-用当前行业分类回填过去
-用后来修订的宏观数据覆盖初值
-用公告报告期当作披露日
-用新闻发布时间但不记录采集时间
-用补采数据伪装成当时已见
-用未来几天走势判断事件影响方向
-用全样本标准化
-用全样本选择特征
-用全样本调参
-```
-
-### 15.3 数据延迟处理
-
-如果 2026-04-24 的新闻在 2026-04-25 才被你采集到：
-
-```text
-source_publish_time = 2026-04-24
-first_seen_at = 2026-04-25
-visible_time = 2026-04-25
-```
-
-它不能用于 2026-04-24 的决策。
-
-### 15.4 数据修订处理
-
-如果宏观数据后来修订：
-
-```text
-version 1: first_seen_at = 初次发布
-version 2: first_seen_at = 修订发布
-```
-
-训练时按 cutoff_time 取当时最新版本。
-
-## 16. 监控与告警
-
-每天必须监控：
-
-```text
-每个 source 是否按时更新
-每个 crawler 是否失败
-新文档数量是否异常
-重复率是否异常
-解析失败率是否异常
-LLM 抽取失败率是否异常
-行情缺失率是否异常
-特征行数是否异常
-模型输入缺失率是否异常
-```
-
-建议指标：
+每天监控：
 
 ```text
 source_freshness_minutes
 crawl_success_rate
-parse_success_rate
-dedup_rate
-new_doc_count
-event_extraction_success_rate
-entity_link_confidence_mean
-feature_missing_rate
-label_missing_rate
+new_item_count
+duplicate_rate
+updated_item_count
+raw_file_missing_count
+content_hash_missing_count
+first_seen_at_missing_count
+http_error_rate
+file_download_failure_rate
+source_schema_change_count
 ```
 
-告警方式：
+异常示例：
+
+- 某公告源 2 小时没有新数据。
+- A 股快照行数突然少 50%。
+- 某 API 字段名变化。
+- PDF 下载成功但大小为 0。
+- content_hash 大量重复。
+- 爬虫全失败但没有告警。
+
+每日报告建议包含：
 
 ```text
-本地日志
-邮件
-企业微信/钉钉/Telegram
-每日自动报告
+每个 source 的成功率
+每个 source 的新 item 数
+每个 source 的错误数
+采集延迟分布
+原始文件大小统计
+缺失字段统计
+需要人工检查的问题
 ```
 
-## 17. 合规与版权边界
+## 13. 合规和版权
 
-### 17.1 基本原则
-
-你可以做个人研究，但要遵守：
-
-- 网站服务条款
-- robots.txt
-- 数据授权协议
-- 版权限制
-- API rate limit
-- 个人信息保护要求
-- 不绕过登录和反爬
-- 不传播受版权保护全文
-
-### 17.2 推荐合规策略
+### 13.1 基本原则
 
 优先使用：
 
-```text
-官方公开数据
-开放 API
-RSS
-授权数据源
-付费数据源
-交易所/券商接口
-```
+- 官方公开数据。
+- 开放 API。
+- RSS。
+- 授权数据源。
+- 付费数据源。
+- 交易所/券商接口。
 
 避免：
 
-```text
-绕过登录
-绕过验证码
-高频抓取
-大规模复制付费内容
-采集非公开用户数据
-传播全文数据库
-```
+- 绕过登录。
+- 绕过验证码。
+- 绕过反爬。
+- 高频压测网站。
+- 大规模复制付费内容。
+- 采集非公开用户数据。
+- 传播受版权保护全文。
 
-### 17.3 新闻全文策略
+### 13.2 每个 source 记录授权信息
 
-如果新闻版权不明确，建议保存：
-
-```text
-URL
-标题
-发布时间
-摘要/公开片段
-内容哈希
-LLM 抽取出的结构化事件
-```
-
-结构化事件通常比全文更适合量化训练，也更节省存储。
-
-## 18. 立即启动方案：前 30 天
-
-前 30 天建议严格拆成两个目标：
+`source_registry` 中必须记录：
 
 ```text
-第一目标：采集层稳定运行
-第二目标：后处理层最小闭环
+terms_url
+robots_url
+license_type
+allowed_frequency
+auth_type
+notes
 ```
 
-如果时间不够，优先保证第一目标。因为采集层每天都在积累不可逆的数据资产，而后处理方法以后可以随时升级。
+### 13.3 新闻全文策略
 
-### 第 1-3 天：搭基础框架
+如果版权不明确：
+
+```text
+保存 URL、标题、摘要、发布时间、来源、哈希。
+全文只保存可合法保存的内容。
+不对外传播全文数据库。
+```
+
+后处理层可以基于允许保存的内容做结构化抽取。
+
+## 14. 备份和灾难恢复
+
+采集层是长期资产，必须备份。
+
+### 14.1 备份策略
+
+建议：
+
+```text
+每日增量备份 metadata 和 manifest
+每周备份 raw 文件
+每月做一次完整快照
+至少保留一份离线备份
+重要 manifest 做多地保存
+```
+
+### 14.2 校验策略
+
+定期校验：
+
+```text
+文件是否存在
+content_hash 是否一致
+manifest 是否能读取
+metadata 是否能关联 raw 文件
+备份是否可恢复
+```
+
+### 14.3 不要只备份派生结果
+
+最重要的是：
+
+```text
+raw 文件
+metadata
+manifest
+source_registry
+crawl logs
+```
+
+事件、特征、模型可以重算，原始数据丢了就不能重来。
+
+## 15. 前 30 天实施计划
+
+### 第 1-3 天：搭采集骨架
 
 完成：
 
 ```text
-source_registry
-crawl_run
-raw_document
-market_snapshot
-data_lake 目录
+source_registry.yaml
+data_lake/collection 目录
+crawl_run 表
+raw_item 表
+raw_file 表
 日志系统
 定时任务
 ```
 
-先接入：
+接入 1-2 个最简单数据源。
+
+### 第 4-7 天：跑通原始保存
+
+完成：
+
+```text
+原始响应保存
+content_hash
+first_seen_at
+每日 manifest
+source health
+错误日志
+```
+
+目标：
+
+```text
+任何一条数据都能找到原始文件和采集时间。
+```
+
+### 第 2 周：扩展 P0 数据源
+
+接入：
 
 ```text
 A 股快照
 公告
+政策/监管
 GDELT
-财经 RSS
-商品期货日线/快照
+商品/全球市场
 ```
-
-### 第 4-7 天：跑通数据留痕
 
 目标：
 
 ```text
-每天稳定采集
-每条数据有 first_seen_at
-原始文件保存
-内容哈希去重
-每日生成采集报告
+每天自动采集，不需要人工启动。
 ```
 
-不要急着做模型。
+### 第 3 周：完善质量和备份
 
-### 第 2 周：做事件抽取
+完成：
+
+```text
+采集质量报告
+source freshness 检查
+失败告警
+备份脚本
+文件哈希校验
+```
+
+### 第 4 周：稳定运行
 
 目标：
 
 ```text
-公告事件抽取
-政策事件抽取
-新闻事件抽取
-实体识别
-股票/行业映射
+连续 7 天不中断
+所有失败都有日志
+所有补采都有 is_backfilled
+每日 manifest 可复盘
 ```
 
-输出：
+第一个月不要急着做模型。只要采集层稳定，就已经在积累最稀缺的数据资产。
 
-```text
-event_table
-event_entity_link
-```
-
-### 第 3 周：做第一版特征
-
-特征：
-
-```text
-stock_event_count_1d
-stock_event_sentiment_1d
-stock_event_risk_5d
-industry_event_count_5d
-policy_support_score_20d
-commodity_change_1d/5d
-global_risk_score_1d
-```
-
-生成：
-
-```text
-date x instrument
-```
-
-### 第 4 周：接入 Qlib
-
-目标：
-
-```text
-把采集到的特征转成 Qlib DataHandler 可用格式
-跑 price/volume baseline
-跑 baseline + event features
-生成 paper trading 信号
-```
-
-### 采集优先级高于后处理
-
-第一个月的优先级应该是：
-
-```text
-P0: 采集不断流、原始数据不丢、时间戳可信
-P1: 最小解析和去重
-P2: 简单事件抽取
-P3: 简单特征和 Qlib 接入
-P4: 模型效果
-```
-
-如果某天只能做一件事，优先修采集器、补日志、补 manifest，而不是调模型。
-
-第一个月不要追求收益，追求：
-
-```text
-数据不断流
-时间不泄漏
-特征可复现
-回测流程可跑
-```
-
-## 19. 3 个月计划
+## 16. 3 个月实施计划
 
 ### 第 1 个月
 
-核心：采集稳定性。
+核心：系统能持续跑。
 
-交付：
+验收：
 
 ```text
-稳定爬虫
-原始数据湖
-时间账本
-公告/新闻/政策事件抽取
-第一版特征
-Qlib baseline
+P0 数据源稳定采集
+first_seen_at 完整
+raw 文件完整
+manifest 完整
+每日质量报告
 ```
 
 ### 第 2 个月
 
-核心：数据质量。
+核心：数据源更丰富。
 
-交付：
+新增：
 
 ```text
-实体链接优化
-去重优化
-事件类型扩展
-商品暴露表
-行业/概念超图
-数据质量 dashboard
+更多政策源
+更多商品源
+宏观发布日历
+天气/灾害源
+公开热度源
+手工维护数据版本化
 ```
 
 ### 第 3 个月
 
-核心：初步模型。
+核心：采集层可运维。
 
-交付：
+完成：
 
 ```text
-LightGBM baseline
-事件特征消融
-超图聚合特征
-paper trading
-每周训练/评估流程
+source health dashboard
+备份恢复演练
+schema 变化检测
+数据覆盖率统计
+采集延迟统计
 ```
 
 3 个月结束时，你应该能回答：
 
 ```text
-哪些数据源最稳定？
-哪些事件类型最多？
-实体链接准确率如何？
-事件特征有没有 Rank IC？
-超图聚合有没有增量？
-数据延迟和缺失是否可控？
+哪些源最稳定？
+哪些源最容易失败？
+每天新增多少数据？
+原始文件是否完整？
+采集延迟是多少？
+补采比例是多少？
+哪些源有合规风险？
 ```
 
-## 20. 6-12 个月计划
+## 17. 长期运维原则
 
-### 6 个月
+### 17.1 稳定比丰富更重要
 
-重点：
+宁可先稳定采集 10 个源，也不要同时接 100 个不稳定源。
+
+### 17.2 原始数据比解析结果更重要
+
+解析器坏了可以重写，原始页面没保存就没了。
+
+### 17.3 first_seen_at 不能被修正
+
+即使发现来源发布时间更早，也不能把 `first_seen_at` 改早。
+
+### 17.4 手工数据也要留痕
+
+人工维护的产业链、概念、别名、商品暴露表，同样必须版本化。
+
+### 17.5 后处理可以失败，采集不能长期失败
+
+如果时间有限，优先修采集器、manifest、备份和监控。
+
+## 18. 和后处理文档的接口
+
+采集层给后处理层提供这些输入：
 
 ```text
-扩大数据源
-做动态超图
-做市场状态分层
-做 walk-forward paper trading
+source_registry
+crawl_run
+raw_item
+raw_file
+market_snapshot_raw
+collection_manifest
+source_health
+manual_versioned_datasets
 ```
 
-模型：
+后处理层必须通过这些字段做 point-in-time 过滤：
 
 ```text
-LightGBM
-CatBoost
-简单 MLP
-简单 gating
+first_seen_at
+source_publish_time
+source_update_time
+crawl_run_id
+content_hash
+is_backfilled
 ```
 
-### 12 个月
-
-重点：
+后处理层可以生成：
 
 ```text
-更可靠的事件统计
-更稳定的模型评估
-行业/风格分层
-不同 horizon 模型
-初步图/超图神经网络实验
+parsed_text
+events
+entity_links
+hyperedges
+features
+labels
+models
+predictions
 ```
 
-可以开始研究：
+但这些都不能写回覆盖采集层原始数据。
 
-```text
-事件半衰期
-事件新颖度
-事件拥挤度
-事件扩散路径
-市场状态门控
-```
+## 19. 后续可以直接落地的开发任务
 
-## 21. 长期方向：1-3 年
-
-当你积累 1-3 年干净数据后，真正有价值的研究会出现：
-
-```text
-地缘政治事件对 A 股行业轮动的影响
-政策事件对行业收益的滞后结构
-商品价格冲击对供应链公司的非线性传导
-气候灾害对地区和行业的影响
-舆情热度与短期反转/动量
-事件超图中的资金共振
-动态市场状态下的事件权重变化
-```
-
-这时可以做：
-
-```text
-动态超图神经网络
-事件基础模型
-金融事件 embedding
-事件-股票对比学习
-事件冲击预测
-多专家 MoE
-```
-
-## 22. 最推荐的最小闭环
-
-如果只做一个最小闭环，我建议：
-
-```text
-数据源:
-  A 股日线/快照
-  巨潮公告
-  政策新闻
-  GDELT
-  商品期货
-
-抽取:
-  LLM 抽取事件
-  实体链接到股票/行业/商品
-
-关系:
-  行业超图
-  概念超图
-  商品暴露超图
-  事件影响超图
-
-特征:
-  事件计数
-  情绪
-  风险
-  新颖度
-  超图邻居聚合
-
-模型:
-  LightGBM
-
-目标:
-  T+1/T+5 横截面收益排名
-
-评估:
-  Rank IC
-  ICIR
-  top-bottom
-  成本后收益
-  回撤
-```
-
-这个闭环最适合个人启动，而且能自然扩展。
-
-## 23. 我对你思路的最终判断
-
-你的思路是可行的，而且是个人量化里很值得长期投入的方向。
-
-但需要把目标从：
-
-```text
-收集世界上一切信息，然后训练一个大模型预测股票
-```
-
-改成：
-
-```text
-从今天开始建立可审计的 point-in-time 多源事件数据湖，
-持续把现实世界事件转成结构化信号和超图关系，
-先用简单模型证明数据增量，
-再逐步升级到动态超图和大模型辅助的事件基础模型。
-```
-
-最重要的原则：
-
-```text
-宁可少收集，也要干净。
-宁可低频，也要可审计。
-宁可简单模型，也要消融有效。
-宁可慢慢积累，也不要混入不可验证历史。
-```
-
-这件事如果坚持做 2-3 年，价值会越来越大。短期它是数据工程，中期它是事件 Alpha 系统，长期它可能变成你自己的金融事件世界模型。
-
-## 24. 后续可以直接落地的开发任务
-
-下一步可以从代码层面实现 V0，但必须拆成两个 milestone。
-
-### V0-A：只做数据收集层
-
-这是最高优先级。它的目标不是赚钱，也不是预测，而是每天稳定产生干净、可审计、不可变的数据资产。
+V0 只做采集层。
 
 ```text
 1. 创建 source_registry.yaml
-2. 创建 data_lake 目录结构
-3. 实现 crawl_run 和 raw_document 元数据表
-4. 实现 AkShare A 股快照采集器
-5. 实现公告/新闻 RSS/GDELT 采集器
-6. 实现 content_hash 去重
-7. 实现每日采集报告
-8. 实现 collection_manifest
-9. 实现 crawler health check
-10. 实现原始数据备份
+2. 创建 data_lake/collection 目录结构
+3. 实现 crawl_run / raw_item / raw_file 元数据表
+4. 实现 A 股快照采集器
+5. 实现公告采集器
+6. 实现政策/监管新闻采集器
+7. 实现 GDELT 采集器
+8. 实现商品/全球市场快照采集器
+9. 实现 content_hash 和 dedup_hash
+10. 实现 collection_manifest
+11. 实现 source_health
+12. 实现每日质量报告
+13. 实现备份脚本
+14. 实现故障告警
 ```
 
-V0-A 的验收标准：
+V0 验收标准：
 
 ```text
-连续 30 天采集不断流
-所有原始数据都有 first_seen_at
-所有原始文件都有 content_hash
-所有 crawler run 都有日志
-任何一天的数据都能按 manifest 复盘
+连续 30 天采集不断流；
+所有 raw item 都有 first_seen_at；
+所有 raw file 都有 content_hash；
+所有 crawler run 都有日志；
+每日 manifest 能还原当天数据清单；
+补采数据被明确标记；
+源失败会告警。
 ```
 
-### V0-B：再做后处理最小闭环
+## 20. 初始参考源
 
-后处理层可以晚一点做，也可以不断推倒重来。
+以下只作为初始信息源清单，实际接入前应确认授权、频率限制和接口稳定性。
 
-```text
-1. 实现第一版 parser
-2. 实现第一版 event_table schema
-3. 实现 LLM 事件抽取占位接口
-4. 实现 entity_link 候选匹配
-5. 实现第一版 hyperedge schema
-6. 实现 Qlib 特征导出模板
-7. 实现 LightGBM baseline
-8. 实现 paper trading 信号记录
-```
+- GDELT Cloud Documentation：https://docs.gdeltcloud.com/
+- GDELT Project：https://www.gdeltproject.org/
+- AkShare 文档：https://akshare.akfamily.xyz/data/stock/stock.html
+- Tushare Pro 文档：https://tushare.pro/document/2
+- BaoStock 文档：http://baostock.com/baostock/index.php
+- 巨潮资讯网：https://www.cninfo.com.cn/
+- 上海证券交易所信息披露：https://www.sse.com.cn/disclosure/listedinfo/announcement/
+- 深圳证券交易所信息披露：https://www.szse.cn/disclosure/listed/notice/
+- 北京证券交易所信息披露：https://www.bse.cn/disclosure/announcement.html
+- 中国证监会：http://www.csrc.gov.cn/
+- 中国人民银行：http://www.pbc.gov.cn/
+- 国家统计局：https://www.stats.gov.cn/
+- 国家数据：https://data.stats.gov.cn/
+- 中国政府网政策文件：https://www.gov.cn/zhengce/
+- 上海期货交易所：https://www.shfe.com.cn/
+- 大连商品交易所：http://www.dce.com.cn/
+- 郑州商品交易所：http://www.czce.com.cn/
+- 广州期货交易所：https://www.gfex.com.cn/
+- 中国金融期货交易所：http://www.cffex.com.cn/
+- Open-Meteo API：https://open-meteo.com/en/docs
+- NASA FIRMS：https://firms.modaps.eosdis.nasa.gov/
+- NOAA Climate Data Online API：https://www.ncdc.noaa.gov/cdo-web/webservices/v2
+- Common Crawl：https://commoncrawl.org/
+- Caldara & Iacoviello Geopolitical Risk Index：https://www.matteoiacoviello.com/gpr.htm
+- AI-GPR Index：https://www.matteoiacoviello.com/ai_gpr.html
 
-建议先实现最小版本，不要一开始写复杂平台。
-
-## 25. 参考资料与初始信息源
-
-以下资料用于本方案的信息源梳理。实际采集前仍需逐个确认授权、访问频率和接口稳定性。
-
-- GDELT Cloud Documentation：GDELT 数据、API、事件和新闻查询文档。https://docs.gdeltcloud.com/
-- GDELT Project：全球新闻、事件、地理和情绪数据项目。https://www.gdeltproject.org/
-- AkShare 文档：A 股实时行情接口示例，包括东方财富实时行情相关函数。https://akshare.akfamily.xyz/data/stock/stock.html
-- Tushare Pro 文档：A 股、基金、期货、宏观等数据接口。https://tushare.pro/document/2
-- BaoStock 文档：证券宝开源量化数据接口。http://baostock.com/baostock/index.php
-- 巨潮资讯网：上市公司公告和信息披露核心来源。https://www.cninfo.com.cn/
-- 上海证券交易所信息披露。https://www.sse.com.cn/disclosure/listedinfo/announcement/
-- 深圳证券交易所信息披露。https://www.szse.cn/disclosure/listed/notice/
-- 北京证券交易所信息披露。https://www.bse.cn/disclosure/announcement.html
-- 中国证监会。http://www.csrc.gov.cn/
-- 中国人民银行。http://www.pbc.gov.cn/
-- 国家统计局。https://www.stats.gov.cn/
-- 国家数据。https://data.stats.gov.cn/
-- 中国政府网政策文件。https://www.gov.cn/zhengce/
-- 上海期货交易所行情数据。https://www.shfe.com.cn/
-- 大连商品交易所。http://www.dce.com.cn/
-- 郑州商品交易所。http://www.czce.com.cn/
-- 广州期货交易所。https://www.gfex.com.cn/
-- 中国金融期货交易所。http://www.cffex.com.cn/
-- Open-Meteo API：开放天气预报和历史天气接口。https://open-meteo.com/en/docs
-- NASA FIRMS：全球火点/火灾近实时数据。https://firms.modaps.eosdis.nasa.gov/
-- NOAA Climate Data Online API。https://www.ncdc.noaa.gov/cdo-web/webservices/v2
-- Common Crawl News / Crawl 数据：开放网页抓取数据，可用于研究公开网页历史语料。https://commoncrawl.org/
-- Caldara & Iacoviello Geopolitical Risk Index。https://www.matteoiacoviello.com/gpr.htm
-- AI-GPR Index：LLM 生成的日频地缘政治风险指数。https://www.matteoiacoviello.com/ai_gpr.html
