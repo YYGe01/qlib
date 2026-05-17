@@ -9,6 +9,7 @@ import fire
 from qlib import auto_init
 from qlib.contrib.rolling.base import Rolling
 from qlib.tests.data import GetData
+from qlib.utils.pickle_utils import add_safe_class
 
 DIRNAME = Path(__file__).absolute().resolve().parent
 
@@ -31,11 +32,28 @@ class RollingBenchmark(Rolling):
             self.logger.warning("Model type is not in the benchmark!")
 
 
+def allow_benchmark_handler_cache() -> None:
+    """Allow benchmark handler caches created by the rolling workflow."""
+    for module, name in [
+        ("qlib.contrib.data.handler", "Alpha158"),
+        ("qlib.contrib.data.loader", "QlibDataLoader"),
+        ("qlib.data.dataset.loader", "QlibDataLoader"),
+        ("qlib.data.dataset.processor", "DropnaLabel"),
+        ("qlib.data.dataset.processor", "CSZScoreNorm"),
+        ("qlib.data.dataset.processor", "DropnaProcessor"),
+        ("qlib.data.dataset.processor", "ProcessInf"),
+        ("qlib.data.dataset.processor", "Fillna"),
+        ("qlib.utils.data", "zscore"),
+    ]:
+        add_safe_class(module, name)
+
+
 if __name__ == "__main__":
     kwargs = {}
     if os.environ.get("PROVIDER_URI", "") == "":
         GetData().qlib_data(exists_skip=True)
     else:
         kwargs["provider_uri"] = os.environ["PROVIDER_URI"]
+    allow_benchmark_handler_cache()
     auto_init(**kwargs)
     fire.Fire(RollingBenchmark)
