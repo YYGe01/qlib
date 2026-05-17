@@ -580,6 +580,20 @@ qlib 实现方式：
 - 输出成本敏感性表。
 - 若成本后收益消失，暂停进入复杂策略，回到事件研究修正规则。
 
+实施记录（2026-05-17）：
+
+- 已新增 `examples/a_share_breakout/backtest_rule_breakout.py`、`mylib/stage6_config.py`、`mylib/stage6_metrics.py`，批量生成阶段 4 无训练规则预测并复用预测运行阶段 6 组合回测矩阵。
+- 已新增 `examples/a_share_breakout/configs/cost_scenarios.yaml`，固定低/中/高成本场景：低成本 `open_cost=0.0003`、`close_cost=0.0010`、`impact_cost=0`；中性成本 `0.0005/0.0015/0.0005`；高成本 `0.0008/0.0020/0.0010`，`min_cost=5`。
+- 已新增四组中性成本 qrun 配置：`configs/workflow_baseline_60d_open.yaml`、`workflow_baseline_60d_vwap.yaml`、`workflow_baseline_120d_open.yaml`、`workflow_baseline_120d_vwap.yaml`。
+- 已生成 `examples/a_share_breakout/outputs/baseline_backtest_summary.csv`、`cost_sensitivity.csv`、`baseline_yearly_returns.csv`、`baseline_board_exposure.csv`、`deal_price_availability_audit.csv` 和 `baseline_backtest_report.md`。
+- 阶段 6 全量命令已完成：`python examples/a_share_breakout/backtest_rule_breakout.py --provider-uri ~/.qlib/qlib_data/cn_data --output-dir examples/a_share_breakout/outputs --breakout-window 60 120 --deal-price open vwap --cost-scenario low neutral high`。
+- 本地预测窗口为 2025-01-01 至 2026-04-17；60 日规则预测 50228 行、5632 个标的；120 日规则预测 36463 行、5299 个标的。
+- 中性成本四组 baseline 结果均明显为负：`baseline_60d_open` 成本后超额年化 -178.57%、`baseline_60d_vwap` -161.85%、`baseline_120d_open` -211.21%、`baseline_120d_vwap` -181.02%。
+- 低成本场景下四组 baseline 成本后超额年化仍全部为负；高成本压力测试进一步恶化。按阶段 6 验收规则，当前应暂停进入阶段 7 自定义事件策略，回到阶段 5/6 修正候选过滤、打分和 TopK 换手问题。
+- 当前 TopK Dropout MVP 日均换手偏高：中性成本下 60 日 open/vwap 分别约 38.61%/42.30%，120 日 open/vwap 分别约 48.07%/52.52%；持有天数代理仅约 1.90 至 2.59 天，和报告里的 20 日事件持有假设明显不一致。
+- open/vwap 可成交性审计显示：60 日 open/vwap 缺成交价率约 0.27%/0.88%，120 日 open/vwap 约 0.32%/0.99%；Qlib 回测期间对部分 `$open`/`$vwap` NaN 发出警告，`$vwap` 缺失时会回退 close price，需要后续继续处理成交价质量。
+- 已通过 `python -m py_compile examples/a_share_breakout/backtest_rule_breakout.py examples/a_share_breakout/mylib/stage6_config.py examples/a_share_breakout/mylib/stage6_metrics.py` 和 `pytest -q tests/test_a_share_breakout_stage6_backtest.py`。
+
 ### 阶段 7：自定义事件策略
 
 目标：摆脱 TopK Dropout 的限制，实现报告里的事件进入、持有期、ATR 止损和趋势退出。
@@ -852,12 +866,13 @@ filter_out =
 5. 已完成：实现 MVP 规则分数。
 6. 已完成：用 qlib 跑无训练 TopK 基础流水线。
 7. 已完成：输出事件研究统计报告。
-8. 下一步：做 open/vwap、低/中/高成本敏感性。
-9. 下一步：形成 `baseline_60d_open`、`baseline_60d_vwap`、`baseline_120d_open`、`baseline_120d_vwap` 四组结果。
-10. 后续：实现自定义事件策略。
-11. 后续：补分钟、行业、资金流、Level-2 数据。
-12. 后续：做 walk-forward 和更完整的统计检验。
-13. 后续：决定是否独立成项目或进入模拟观察。
+8. 已完成：做 open/vwap、低/中/高成本敏感性。
+9. 已完成：形成 `baseline_60d_open`、`baseline_60d_vwap`、`baseline_120d_open`、`baseline_120d_vwap` 四组结果。
+10. 下一步：暂停阶段 7，先回到事件研究、候选过滤、打分权重和 TopK 换手控制。
+11. 后续：在阶段 6 MVP 改善后，再决定是否实现自定义事件策略。
+12. 后续：补分钟、行业、资金流、Level-2 数据。
+13. 后续：做 walk-forward 和更完整的统计检验。
+14. 后续：决定是否独立成项目或进入模拟观察。
 
 ## 8. 风险清单
 
@@ -876,10 +891,10 @@ filter_out =
 
 ## 9. 下一步最小任务
 
-阶段 0-5 已闭环，下一步不需要先补所有数据。建议按下面 5 个任务继续：
+阶段 0-6 已闭环，当前阶段 6 的成本后结果不支持直接进入复杂策略。建议按下面 5 个任务继续：
 
-1. 拆分阶段 6 的四组 baseline 配置：60/120 日 × open/vwap。
-2. 增加低/中/高成本情景配置，明确 `open_cost`、`close_cost`、滑点或 impact 代理口径。
-3. 运行四组 qrun 并落盘组合分析产物，记录 recorder、年化收益、最大回撤、信息比率、换手率和成本前后差异。
-4. 审计 `$open` 和 `$vwap` 可成交性，处理阶段 4 已观察到的 `$open` NaN 数据质量警告。
-5. 若成本后收益明显消失，暂停自定义事件策略，回到阶段 5 特征与过滤规则修正。
+1. 回查阶段 6 持仓与交易日志，确认亏损主要来自信号方向、TopK 强制换手、成交价缺失回退，还是候选事件质量。
+2. 回到阶段 5，把事件研究中稳定区分真/假突破的特征转成更严格的交易前过滤规则，重点降低高 ATR 噪声、单日量突刺和高失真候选。
+3. 调整阶段 4/6 的 TopK MVP 约束，例如降低 `n_drop`、增加最低持有天数、过滤低分或高失真候选，先用同一阶段 6 脚本复测。
+4. 单独审计 `$open` 和 `$vwap` 缺失样本，避免 vwap 缺失时静默回退 close price 污染 open/vwap 对比。
+5. 只有在低/中成本下留出期成本后超额不再整体为负、且换手回到可解释范围后，再进入阶段 7 自定义事件策略。

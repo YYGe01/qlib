@@ -1,0 +1,25 @@
+# 阶段 6 成本敏感性场景。
+# Qlib Exchange 支持 open_cost、close_cost、min_cost 和 impact_cost。
+# 这里把“滑点/impact 代理”落在 impact_cost；它会按成交额占市场成交额的平方缩放。
+cost_scenarios:
+  low:
+    label: "低成本"
+    open_cost: 0.0003
+    close_cost: 0.0010
+    impact_cost: 0.0
+    min_cost: 5
+    note: "上限参考：低佣金、无额外 impact。"
+  neutral:
+    label: "中性成本"
+    open_cost: 0.0005
+    close_cost: 0.0015
+    impact_cost: 0.0005
+    min_cost: 5
+    note: "主报告口径：卖出端含印花税，并加入轻度 impact 代理。"
+  high:
+    label: "高成本"
+    open_cost: 0.0008
+    close_cost: 0.0020
+    impact_cost: 0.0010
+    min_cost: 5
+    note: "压力测试：高佣金、较高印花税/滑点/impact 代理。"

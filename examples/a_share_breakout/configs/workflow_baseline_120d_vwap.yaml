@@ -1,0 +1,83 @@
+# A 股日线突破阶段 6 baseline：120 日突破 + T+1 vwap + 中性成本。
+# 可从仓库根目录运行：
+#   python -m qlib.cli.run examples/a_share_breakout/configs/workflow_baseline_120d_vwap.yaml
+
+qlib_init:
+    provider_uri: "~/.qlib/qlib_data/cn_data"
+    region: cn
+
+sys:
+    rel_path: [".."]
+
+experiment_name: a_share_breakout_baseline_120d_vwap_neutral
+
+market: &market all
+benchmark: &benchmark SH000300
+
+data_handler_config: &data_handler_config
+    start_time: 2021-01-01
+    end_time: 2026-04-17
+    fit_start_time: 2021-01-01
+    fit_end_time: 2023-12-31
+    instruments: *market
+    breakout_window: 120
+    benchmark_instrument: *benchmark
+    infer_processors: []
+    learn_processors: []
+
+port_analysis_config: &port_analysis_config
+    strategy:
+        class: TopkDropoutStrategy
+        module_path: qlib.contrib.strategy
+        kwargs:
+            signal: <PRED>
+            topk: 10
+            n_drop: 3
+            risk_degree: 0.95
+            only_tradable: true
+    backtest:
+        start_time: 2025-01-02
+        end_time: 2026-04-17
+        account: 100000000
+        benchmark: *benchmark
+        exchange_kwargs:
+            limit_threshold: 0.095
+            deal_price: vwap
+            open_cost: 0.0005
+            close_cost: 0.0015
+            impact_cost: 0.0005
+            min_cost: 5
+
+task:
+    model:
+        class: RuleSignalModel
+        module_path: mylib.model
+        kwargs:
+            breakout_window: 120
+    dataset:
+        class: DatasetH
+        module_path: qlib.data.dataset
+        kwargs:
+            handler:
+                class: AShareBreakoutRuleHandler
+                module_path: mylib.handler
+                kwargs: *data_handler_config
+            segments:
+                train: [2021-01-01, 2023-12-31]
+                valid: [2024-01-01, 2024-12-31]
+                test: [2025-01-01, 2026-04-17]
+    record:
+        - class: SignalRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+              model: <MODEL>
+              dataset: <DATASET>
+        - class: SigAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+              ana_long_short: true
+              ann_scaler: 252
+        - class: PortAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+              config: *port_analysis_config

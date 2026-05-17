@@ -228,3 +228,67 @@ python examples/a_share_breakout/event_study.py \
 | `python -m py_compile examples/a_share_breakout/event_study.py` | 通过 |
 | `pytest -q tests/test_a_share_breakout_event_study.py` | 通过：4 个测试 |
 | `python examples/a_share_breakout/event_study.py --provider-uri ~/.qlib/qlib_data/cn_data --output-dir examples/a_share_breakout/outputs --breakout-windows 60 120` | 通过，并生成阶段 5 报告、统计表和 6 张图 |
+
+## 阶段 6：组合回测 MVP 与成本敏感性
+
+阶段 6 使用阶段 4 的无训练 `RuleSignalModel`，不重新定义打分逻辑。脚本会对每个突破窗口只生成一次 `pred.pkl`，再复用同一份预测跑 `open/vwap × 低/中/高成本` 回测矩阵。
+
+在仓库根目录执行：
+
+```bash
+python examples/a_share_breakout/backtest_rule_breakout.py \
+  --provider-uri ~/.qlib/qlib_data/cn_data \
+  --output-dir examples/a_share_breakout/outputs \
+  --breakout-window 60 120 \
+  --deal-price open vwap \
+  --cost-scenario low neutral high
+```
+
+阶段 6 新增文件：
+
+| 文件 | 用途 |
+|---|---|
+| `backtest_rule_breakout.py` | 阶段 6 CLI 入口，批量生成规则预测、运行组合回测、输出摘要和报告。 |
+| `mylib/stage6_config.py` | 成本场景、数据集、模型和 `PortAnaRecord` 配置构建。 |
+| `mylib/stage6_metrics.py` | 组合指标提取、open/vwap 可成交性审计、成本敏感性和 Markdown 报告。 |
+| `configs/cost_scenarios.yaml` | 低/中/高成本场景，包含 `open_cost`、`close_cost`、`impact_cost` 和 `min_cost`。 |
+| `configs/workflow_baseline_*` | 四组中性成本 qrun baseline：60/120 日 × open/vwap。 |
+
+阶段 6 输出文件仍在 `outputs/` 下，不进入 git：
+
+| 输出文件 | 用途 |
+|---|---|
+| `baseline_backtest_summary.csv` | 12 组组合回测摘要，含 recorder、年化收益、最大回撤、IR、换手和成本。 |
+| `cost_sensitivity.csv` | 低/中/高成本敏感性长表。 |
+| `baseline_yearly_returns.csv` | 分年度收益、基准、超额和成本。 |
+| `baseline_board_exposure.csv` | 持仓板块暴露；当前不是收益贡献归因。 |
+| `deal_price_availability_audit.csv` | open/vwap 执行价缺失率和可交易代理率审计。 |
+| `baseline_backtest_report.md` | 阶段 6 Markdown 报告。 |
+
+最近一次本地运行：
+
+| baseline | 中性成本 recorder | 成本后超额年化 | 最大回撤 | 日均换手 | 持有天数代理 |
+|---|---|---:|---:|---:|---:|
+| `baseline_60d_open` | `mlruns/867736467774860149/c6dfa9026f1f45f793127b817645be8f` | -178.57% | -214.46% | 38.61% | 2.59 |
+| `baseline_60d_vwap` | `mlruns/228360756557040550/586fb7ca6a0e41c598f52abf080b1c99` | -161.85% | -193.78% | 42.30% | 2.36 |
+| `baseline_120d_open` | `mlruns/195305598796427711/ecc1dfa0cf9a4075bdac50376128273c` | -211.21% | -257.23% | 48.07% | 2.08 |
+| `baseline_120d_vwap` | `mlruns/291751630157164956/e0d04f06258149db9ab13cdeaa0b8ac1` | -181.02% | -219.69% | 52.52% | 1.90 |
+
+成本敏感性结论：低成本场景下四组 baseline 成本后超额年化仍全部为负；中性成本和高成本进一步恶化。按实施计划，当前不应直接进入阶段 7 自定义事件策略，应先回到事件研究、候选过滤和 TopK 换手问题修正规则。
+
+open/vwap 可成交性审计：
+
+| window | deal_price | execution rows | 缺成交价率 | 可交易代理率 |
+|---:|---|---:|---:|---:|
+| 60 | open | 50072 | 0.27% | 99.73% |
+| 60 | vwap | 50072 | 0.88% | 99.12% |
+| 120 | open | 36330 | 0.32% | 99.68% |
+| 120 | vwap | 36330 | 0.99% | 99.01% |
+
+阶段 6 验证记录：
+
+| 命令 | 结果 |
+|---|---|
+| `python -m py_compile examples/a_share_breakout/backtest_rule_breakout.py examples/a_share_breakout/mylib/stage6_config.py examples/a_share_breakout/mylib/stage6_metrics.py` | 通过 |
+| `pytest -q tests/test_a_share_breakout_stage6_backtest.py` | 通过：4 个测试 |
+| `python examples/a_share_breakout/backtest_rule_breakout.py --provider-uri ~/.qlib/qlib_data/cn_data --output-dir examples/a_share_breakout/outputs --breakout-window 60 120 --deal-price open vwap --cost-scenario low neutral high` | 通过，并生成 12 组回测、成本敏感性、年度收益、板块暴露和 open/vwap 审计 |

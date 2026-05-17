@@ -41,7 +41,7 @@ a_share_breakout = 针对 A 股日线突破问题写的一套研究数据流和�
 
 ## 2. 当前到底是在验证什么
 
-当前已落地的是阶段 0 到阶段 5：
+当前已落地的是阶段 0 到阶段 6：
 
 | 阶段 | 当前状态 | 性质 |
 |---|---|---|
@@ -51,7 +51,7 @@ a_share_breakout = 针对 A 股日线突破问题写的一套研究数据流和�
 | 阶段 3 | 已有 `daily_features.py` 和特征矩阵输出 | 验证规则特征和日线失真评分能否生成。 |
 | 阶段 4 | 已接入 qrun | `RuleSignalModel` 不训练参数，把 T 日可见规则特征转成 Qlib prediction。 |
 | 阶段 5 | 已生成正式事件研究报告 | 用事件统计、分层诊断和 HAC 收益统计判断阶段 6 回测重点。 |
-| 阶段 6 | 尚未生成完整组合回测矩阵 | 后续做 60/120 日、open/vwap 和成本情景敏感性。 |
+| 阶段 6 | 已生成完整组合回测矩阵 | 已完成 60/120 日、open/vwap 和低/中/高成本情景敏感性；结果不支持直接进入复杂策略。 |
 
 因此，目前确实主要是在做研究验证：
 
@@ -59,13 +59,13 @@ a_share_breakout = 针对 A 股日线突破问题写的一套研究数据流和�
 2. 60/120 日突破事件能不能被可复现地识别。
 3. 真突破/假突破标签能不能独立落盘，且不污染交易信号。
 4. T 日可见的规则特征能不能形成每日股票面板。
-5. 后续是否值得进入 Qlib 组合回测。
+5. TopK Dropout MVP 扣成本后是否仍有组合交易价值。
 
 还没有完成的是：
 
 1. 没有训练任何机器学习模型。
-2. 阶段 4 已能生成 `pred.pkl` 并跑通 `PortAnaRecord`，但还没有形成阶段 6 要求的 60/120 日、open/vwap、成本情景完整回测矩阵。
-3. 阶段 5 已生成事件研究报告，但还没有组合净值、换手率、最大回撤等正式策略报告。
+2. 阶段 6 已形成 60/120 日、open/vwap、低/中/高成本完整回测矩阵，但四组中性成本 baseline 成本后超额年化均明显为负。
+3. 还没有实现阶段 7 的事件生命周期策略；按阶段 6 结果，应先修正规则与换手问题，再决定是否进入阶段 7。
 
 ## 3. 总体数据流
 
@@ -742,10 +742,21 @@ close_cost: 0.0010 / 0.0015 / 0.0020
 
 ### 10.3 处理
 
-Qlib 工作流：
+阶段 6 提供两类运行方式。
+
+批量矩阵脚本：
 
 ```text
-qrun workflow_rule_breakout.yaml
+python examples/a_share_breakout/backtest_rule_breakout.py
+  -> 每个突破窗口只生成一次规则预测
+  -> 复用 pred 跑 open/vwap × 低/中/高成本
+  -> 写出 summary、cost sensitivity、yearly return、board exposure 和 deal price audit
+```
+
+单组 qrun 配置：
+
+```text
+qrun configs/workflow_baseline_60d_open.yaml 等
   -> dataset 生成特征
   -> RuleSignalModel.predict() 输出分数
   -> SignalRecord 记录 pred.pkl
@@ -755,7 +766,7 @@ qrun workflow_rule_breakout.yaml
 
 ### 10.4 输出
 
-计划输出 Qlib recorder 产物，典型包括：
+输出 Qlib recorder 产物，典型包括：
 
 ```text
 pred.pkl
@@ -764,15 +775,27 @@ portfolio_analysis/positions_normal_1day.pkl
 portfolio_analysis/port_analysis_1day.pkl
 ```
 
-摘要表样例：
+批量脚本还会输出：
 
-```csv
-experiment,deal_price,cost_scenario,annual_return,max_drawdown,information_ratio,turnover,cost_drag
-baseline_60d_open,open,neutral,0.12,-0.18,0.80,4.2,0.05
-baseline_60d_vwap,vwap,neutral,0.09,-0.17,0.62,4.1,0.06
+```text
+outputs/baseline_backtest_summary.csv
+outputs/cost_sensitivity.csv
+outputs/baseline_yearly_returns.csv
+outputs/baseline_board_exposure.csv
+outputs/deal_price_availability_audit.csv
+outputs/baseline_backtest_report.md
 ```
 
-上面的数值是格式示例，不是当前结果。
+最近一次中性成本结果：
+
+| baseline | 成本后超额年化 | 日均换手 | 持有天数代理 |
+|---|---:|---:|---:|
+| `baseline_60d_open` | -178.57% | 38.61% | 2.59 |
+| `baseline_60d_vwap` | -161.85% | 42.30% | 2.36 |
+| `baseline_120d_open` | -211.21% | 48.07% | 2.08 |
+| `baseline_120d_vwap` | -181.02% | 52.52% | 1.90 |
+
+结论：低成本场景下四组 baseline 成本后超额年化仍全部为负；当前应暂停进入阶段 7，先回到事件研究、候选过滤、打分和 TopK 换手控制。
 
 ### 10.5 是否使用 Qlib
 
@@ -1033,7 +1056,7 @@ datetime    instrument  score
 
 ### 15.6 阶段 6 计划中的交易解释
 
-若阶段 4 生成分数后，`SZ002776` 在 `2021-10-26` 收盘后位于全市场 TopK，则组合回测会在 `2021-10-27` 用 open 或 vwap 执行。
+若阶段 4/6 生成分数后，`SZ002776` 在 `2021-10-26` 收盘后位于全市场 TopK，则组合回测会在 `2021-10-27` 用 open 或 vwap 执行。
 
 ```text
 T 日：2021-10-26 收盘后产生信号
@@ -1049,5 +1072,5 @@ T+1：2021-10-27 开盘或 VWAP 买入
 2. 阶段 2 的 `label` 使用未来数据，只能用于统计，不能用于信号。
 3. 阶段 3 的 `next_open_*_research` 使用 T+1 数据，只能用于事后归因。
 4. 阶段 4 才开始把规则分数接成 Qlib prediction。
-5. 阶段 6 才真正回答“扣成本后是否能交易”。
+5. 阶段 6 已回答第一版 TopK MVP “扣成本后是否能交易”：当前结果不支持直接进入更复杂策略。
 6. Qlib 提供通用框架，本目录提供 A 股突破研究的具体定义、过滤、标签和分数。
