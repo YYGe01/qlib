@@ -1,0 +1,8 @@
+version: 1
+profile: python
+commit_policy: auto
+commit_message: conventional-commits
+agents:
+  codex: true
+  claude: true
+  cursor: true

@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+msg_file="${1:?commit message file required}"
+first_line="$(sed -n '1p' "$msg_file")"
+
+case "$first_line" in
+  Merge\ *|Revert\ *|fixup!\ *|squash!\ *)
+    exit 0
+    ;;
+esac
+
+python3 - "$msg_file" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+message = path.read_text(encoding="utf-8", errors="replace").splitlines()
+first = message[0].strip() if message else ""
+
+pattern = re.compile(
+    r"^(feat|fix|docs|test|refactor|chore|build|ci|perf|style|revert)"
+    r"(\([a-z0-9._/-]+\))?!?: .{1,72}$"
+)
+
+if pattern.match(first):
+    sys.exit(0)
+
+print("提交信息格式不符合规范。", file=sys.stderr)
+print("", file=sys.stderr)
+print("期望使用 Conventional Commits 格式：", file=sys.stderr)
+print("  <type>(<scope>): <summary>", file=sys.stderr)
+print("", file=sys.stderr)
+print("允许的 type：", file=sys.stderr)
+print("  feat, fix, docs, test, refactor, chore, build, ci, perf, style, revert", file=sys.stderr)
+print("", file=sys.stderr)
+print(f"当前第一行：{first!r}", file=sys.stderr)
+sys.exit(1)
+PY
