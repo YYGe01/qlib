@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 
 def load_script_module(name, path):
@@ -15,7 +16,6 @@ def load_script_module(name, path):
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 daily_predict = load_script_module("daily_predict", SCRIPTS_DIR / "daily_predict.py")
-update_predict_data = load_script_module("update_predict_data", SCRIPTS_DIR / "update_predict_data.py")
 
 
 def test_resolve_instruments_defaults_to_csi300(tmp_path):
@@ -36,6 +36,13 @@ def test_resolve_instruments_from_file(tmp_path):
     instruments = daily_predict.resolve_instruments({"instruments_file": str(instruments_file)}, tmp_path)
 
     assert instruments == ["SH600000", "SZ000001", "SH600519"]
+
+
+def test_run_data_update_rejects_empty_command(tmp_path):
+    config = {"data_update": {"enabled": True, "command": []}}
+
+    with pytest.raises(TypeError, match="data_update.command"):
+        daily_predict.run_data_update(config, tmp_path)
 
 
 def test_output_path_for_date_uses_template(tmp_path):
@@ -81,44 +88,3 @@ def test_prediction_to_result_frame_renames_single_score_column():
 
     assert result.columns.tolist() == ["datetime", "rank", "instrument", "score"]
     assert result.loc[0, "score"] == 0.2
-
-
-def test_sync_prediction_data_copies_only_selected_universe(tmp_path):
-    source = tmp_path / "cn_data"
-    target = tmp_path / "cn_predict_csi300"
-    (source / "calendars").mkdir(parents=True)
-    (source / "calendars" / "day.txt").write_text("2026-04-16\n2026-04-17\n", encoding="utf-8")
-    (source / "instruments").mkdir()
-    (source / "instruments" / "all.txt").write_text(
-        "SH600000\t2000-01-01\t2099-12-31\n"
-        "SZ000001\t2000-01-01\t2099-12-31\n"
-        "SH600001\t2000-01-01\t2099-12-31\n",
-        encoding="utf-8",
-    )
-    (source / "instruments" / "csi300.txt").write_text(
-        "SH600000\t2000-01-01\t2099-12-31\n"
-        "SZ000001\t2000-01-01\t2099-12-31\n",
-        encoding="utf-8",
-    )
-    for symbol in ["sh600000", "sz000001", "sh600001"]:
-        feature_dir = source / "features" / symbol
-        feature_dir.mkdir(parents=True)
-        (feature_dir / "close.day.bin").write_bytes(symbol.encode("utf-8"))
-
-    stats = update_predict_data.sync_prediction_data(source, target, market="csi300")
-
-    assert stats.instruments == 2
-    assert stats.copied_files == 2
-    assert (target / "calendars" / "day.txt").exists()
-    assert (target / "features" / "sh600000" / "close.day.bin").exists()
-    assert (target / "features" / "sz000001" / "close.day.bin").exists()
-    assert not (target / "features" / "sh600001").exists()
-    assert (target / "instruments" / "csi300.txt").read_text(encoding="utf-8").splitlines() == [
-        "SH600000\t2000-01-01\t2099-12-31",
-        "SZ000001\t2000-01-01\t2099-12-31",
-    ]
-
-    second_stats = update_predict_data.sync_prediction_data(source, target, market="csi300")
-
-    assert second_stats.copied_files == 0
-    assert second_stats.skipped_files == 2

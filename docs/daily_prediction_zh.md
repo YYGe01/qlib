@@ -5,8 +5,8 @@
 ## 目标
 
 - 全市场 `cn_data` 继续作为训练数据目录，按月从社区数据源刷新后用于增量训练。
-- 每日预测使用单独的轻量 Qlib 数据目录，例如 `~/.qlib/qlib_data/cn_predict_csi300`。
-- 预测股票池可以是 `csi300`、配置文件中的自选列表，或 YAML 里直接列出的标的。
+- 每日预测也直接使用 `~/.qlib/qlib_data/cn_data`，不再维护单独预测数据目录。
+- 预测股票池可以是 `csi300`、配置文件中的自选列表，或 YAML 里直接列出的标的；如果每天只更新部分标的，就只预测这些标的。
 - 每次运行只输出当天一个 CSV，方便人工查看或后续接入交易/通知流程。
 
 ## 默认配置
@@ -21,7 +21,7 @@ examples/benchmarks/LightGBM/daily_predict_lightgbm_Alpha158_2026.yaml
 
 ```yaml
 qlib_init:
-    provider_uri: "~/.qlib/qlib_data/cn_predict_csi300"
+    provider_uri: "~/.qlib/qlib_data/cn_data"
     region: cn
 
 experiment:
@@ -36,11 +36,16 @@ prediction:
     output_filename: "{date}.csv"
 ```
 
-`qlib_init.provider_uri` 是每日预测数据目录，建议和全市场训练目录分开。只要这个目录里有当天需要预测的行情、日历和对应 instruments，就可以不更新全市场数据。
+`qlib_init.provider_uri` 直接指向全市场 `cn_data`。预测时不要求全市场所有标的都更新到最新交易日，
+但至少要保证：
+
+- `calendars/day.txt` 包含要预测的交易日；
+- 你要预测的标的在 `features/<instrument>/` 下有该交易日行情；
+- 如果使用 `prediction.instruments: csi300` 这类市场池，池内未更新标的可能产生空值或缺失；每天只更新部分标的时，建议使用 `instruments_file` 或显式列表。
 
 `experiment.recorder_id` 必须指向已经训练好的 recorder。训练产物中需要有 `params.pkl` 和 `dataset`。
 
-`prediction.instruments` 默认是 `csi300`。如果预测数据目录没有 `csi300` instruments 文件，或者你只想看部分股票，可以改成列表：
+`prediction.instruments` 默认是 `csi300`。如果你只想看部分股票，或者 `cn_data` 只有部分标的更新到最新交易日，可以改成列表：
 
 ```yaml
 prediction:
@@ -95,9 +100,9 @@ datetime,rank,instrument,score
 
 JSON 是本次运行的简要 manifest，记录日期、recorder、行数、NaN 数量和输出路径。
 
-## 可选数据更新钩子
+## 可选 cn_data 更新钩子
 
-如果你已经有自己的轻量预测数据更新脚本，可以在 YAML 中启用：
+如果你已经有自己的 `cn_data` 增量更新脚本，可以在 YAML 中启用：
 
 ```yaml
 data_update:
@@ -105,25 +110,15 @@ data_update:
     cwd: "."
     command:
         - "python"
-        - "scripts/update_predict_data.py"
-        - "--market"
-        - "csi300"
+        - "scripts/your_update_cn_data.py"
 ```
 
-命令用列表形式配置，不通过 shell 执行。这个钩子只负责在预测前调用你的数据更新命令；具体从哪个数据源下载、如何转换成 Qlib bin，由你的数据更新脚本负责。
+命令用列表形式配置，不通过 shell 执行。这个钩子只负责在预测前调用你的数据更新命令；
+具体从哪个数据源下载、是否只更新部分标的、如何转换成 Qlib bin，由你的数据更新脚本负责。
 
-仓库也提供了一个轻量同步脚本，可以从已有全市场 Qlib 数据目录复制指定股票池到独立预测目录：
-
-```bash
-python scripts/update_predict_data.py \
-  --source-uri ~/.qlib/qlib_data/cn_data \
-  --target-uri ~/.qlib/qlib_data/cn_predict_csi300 \
-  --market csi300
-```
-
-这个脚本不下载外部行情，只复制 `calendars/`、选定 instruments 和对应 `features/<instrument>/`。
-如果全市场源目录没有更新，它不会凭空产生新行情；如果你先用自己的数据源更新了源目录或预测目录，
-它可以只同步关注股票池，避免每日处理全市场。
+`cn_data` 不必每天全市场完整更新。只要当天预测只读取已更新的标的，Qlib 的 `D.features`
+会按传入的 instruments 取数。风险在于：如果你传入 `csi300`，但其中部分标的没有最新行情，
+这些标的的特征可能为空或最终没有有效 score。因此部分更新时最好同步调整 `prediction.instruments_file`。
 
 临时跳过数据更新：
 
@@ -146,7 +141,7 @@ QLIB_DAILY_LOG=logs/daily_predict.log
 
 ## 性能建议
 
-- 每日预测数据目录只维护关注股票池，例如 `csi300` 或自选池。
-- 全市场 `cn_data` 保留给月度刷新和增量训练，不放进每日预测流程。
+- 每日只更新你要看的标的也可以，但预测配置要同步限制 instruments。
+- 月度再用社区包刷新全市场 `cn_data`，用于训练或大范围回测。
 - `prediction.topk` 可以只导出排名靠前的标的；不设置时导出全部预测标的。
 - 如果自定义 handler 需要额外历史窗口，把 `prediction.history_window` 调大，例如 `60`。默认 `0`，适合当前 Alpha158 日线配置的快速推理路径。

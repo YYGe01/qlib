@@ -1,8 +1,8 @@
 qlib_init:
-    # Use a lightweight prediction data directory here. Keep the full-market
-    # training cn_data independent, so monthly full-data refreshes do not block
-    # daily selected-universe prediction.
-    provider_uri: "~/.qlib/qlib_data/cn_predict_csi300"
+    # Use the same cn_data directory as training. Daily prediction can still
+    # restrict instruments below, so cn_data does not have to update every
+    # market instrument before inference.
+    provider_uri: "~/.qlib/qlib_data/cn_data"
     region: cn
 
 experiment:
@@ -13,25 +13,18 @@ experiment:
     recorder_id: "656273f29b6e46f191d4de56866e52f6"
 
 data_update:
-    # Optional hook for your own incremental data update command. Keep it
-    # disabled until the prediction data updater is ready.
+    # Optional hook for your own cn_data incremental update command.
+    # Keep disabled when data has already been updated before this script runs.
     enabled: false
     cwd: "."
-    command:
-        - "python"
-        - "scripts/update_predict_data.py"
-        - "--source-uri"
-        - "~/.qlib/qlib_data/cn_data"
-        - "--target-uri"
-        - "~/.qlib/qlib_data/cn_predict_csi300"
-        - "--market"
-        - "csi300"
+    command: []
 
 prediction:
     date: latest
     freq: day
-    # Fast path: predict a market pool from the prediction data directory.
-    # You can also use instruments_file or an explicit list.
+    # Fast path: predict a market pool from cn_data. If cn_data is only
+    # partially updated daily, prefer instruments_file or an explicit list for
+    # the instruments you updated and want to inspect.
     instruments: csi300
     # instruments_file: "configs/predict_universe.txt"
     # instruments:

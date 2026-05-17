@@ -94,7 +94,7 @@ def run_data_update(config: Mapping[str, Any], base_dir: Path, skip: bool = Fals
         return
 
     command = update_config.get("command")
-    if not isinstance(command, Sequence) or isinstance(command, (str, bytes)):
+    if not command or not isinstance(command, Sequence) or isinstance(command, (str, bytes)):
         raise TypeError("data_update.command must be a list, for example: ['python', 'scripts/update.py']")
     if not all(isinstance(part, str) for part in command):
         raise TypeError("Every item in data_update.command must be a string.")
