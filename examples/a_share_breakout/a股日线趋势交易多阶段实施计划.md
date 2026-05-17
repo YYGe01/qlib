@@ -582,7 +582,7 @@ qlib 实现方式：
 
 实施记录（2026-05-17）：
 
-- 已新增 `examples/a_share_breakout/backtest_rule_breakout.py`、`mylib/stage6_config.py`、`mylib/stage6_metrics.py`，批量生成阶段 4 无训练规则预测并复用预测运行阶段 6 组合回测矩阵。
+- 已新增 `examples/a_share_breakout/backtest_rule_breakout.py`、`mylib/stage6_config.py`、`mylib/stage6_metrics.py` 和 `mylib/stage6_report.py`，批量生成阶段 4 无训练规则预测并复用预测运行阶段 6 组合回测矩阵。
 - 已新增 `examples/a_share_breakout/configs/cost_scenarios.yaml`，固定低/中/高成本场景：低成本 `open_cost=0.0003`、`close_cost=0.0010`、`impact_cost=0`；中性成本 `0.0005/0.0015/0.0005`；高成本 `0.0008/0.0020/0.0010`，`min_cost=5`。
 - 已新增四组中性成本 qrun 配置：`configs/workflow_baseline_60d_open.yaml`、`workflow_baseline_60d_vwap.yaml`、`workflow_baseline_120d_open.yaml`、`workflow_baseline_120d_vwap.yaml`。
 - 已生成 `examples/a_share_breakout/outputs/baseline_backtest_summary.csv`、`cost_sensitivity.csv`、`baseline_yearly_returns.csv`、`baseline_board_exposure.csv`、`deal_price_availability_audit.csv` 和 `baseline_backtest_report.md`。
@@ -592,7 +592,14 @@ qlib 实现方式：
 - 低成本场景下四组 baseline 成本后超额年化仍全部为负；高成本压力测试进一步恶化。按阶段 6 验收规则，当前应暂停进入阶段 7 自定义事件策略，回到阶段 5/6 修正候选过滤、打分和 TopK 换手问题。
 - 当前 TopK Dropout MVP 日均换手偏高：中性成本下 60 日 open/vwap 分别约 38.61%/42.30%，120 日 open/vwap 分别约 48.07%/52.52%；持有天数代理仅约 1.90 至 2.59 天，和报告里的 20 日事件持有假设明显不一致。
 - open/vwap 可成交性审计显示：60 日 open/vwap 缺成交价率约 0.27%/0.88%，120 日 open/vwap 约 0.32%/0.99%；Qlib 回测期间对部分 `$open`/`$vwap` NaN 发出警告，`$vwap` 缺失时会回退 close price，需要后续继续处理成交价质量。
-- 已通过 `python -m py_compile examples/a_share_breakout/backtest_rule_breakout.py examples/a_share_breakout/mylib/stage6_config.py examples/a_share_breakout/mylib/stage6_metrics.py` 和 `pytest -q tests/test_a_share_breakout_stage6_backtest.py`。
+- 已通过 `python -m py_compile examples/a_share_breakout/backtest_rule_breakout.py examples/a_share_breakout/mylib/stage6_config.py examples/a_share_breakout/mylib/stage6_metrics.py examples/a_share_breakout/mylib/stage6_report.py` 和 `pytest -q tests/test_a_share_breakout_stage6_backtest.py`。
+
+阶段 6.1 换手控制诊断（2026-05-17）：
+
+- 已为阶段 6 CLI 增加 `--hold-thresh` 和 `--output-prefix`，并把 Markdown 报告生成拆到 `mylib/stage6_report.py`，避免指标/审计文件继续膨胀。
+- 已运行中性成本、`n_drop=1`、`hold_thresh=5` 的四组敏感性：`python examples/a_share_breakout/backtest_rule_breakout.py --provider-uri ~/.qlib/qlib_data/cn_data --output-dir examples/a_share_breakout/outputs --breakout-window 60 120 --deal-price open vwap --cost-scenario neutral --n-drop 1 --hold-thresh 5 --output-prefix turnover_hold5_`。
+- 结果显示强制换手是主要拖累之一：日均换手从原中性成本约 38.61%/42.30%/48.07%/52.52% 降到 3.80%/2.92%/5.71%/5.81%；持有天数代理提高到约 17.21 至 34.27 天。
+- 成本后超额年化显著改善但仍为负：60 日 open/vwap 为 -64.64%/-51.71%，120 日 open/vwap 为 -61.43%/-61.65%。因此阶段 7 继续暂停，下一步应先把阶段 5 的稳定区分特征转成更严格的候选过滤和打分约束。
 
 ### 阶段 7：自定义事件策略
 
@@ -891,10 +898,10 @@ filter_out =
 
 ## 9. 下一步最小任务
 
-阶段 0-6 已闭环，当前阶段 6 的成本后结果不支持直接进入复杂策略。建议按下面 5 个任务继续：
+阶段 0-6.1 已闭环，当前阶段 6 的成本后结果不支持直接进入复杂策略。建议按下面 5 个任务继续：
 
-1. 回查阶段 6 持仓与交易日志，确认亏损主要来自信号方向、TopK 强制换手、成交价缺失回退，还是候选事件质量。
-2. 回到阶段 5，把事件研究中稳定区分真/假突破的特征转成更严格的交易前过滤规则，重点降低高 ATR 噪声、单日量突刺和高失真候选。
-3. 调整阶段 4/6 的 TopK MVP 约束，例如降低 `n_drop`、增加最低持有天数、过滤低分或高失真候选，先用同一阶段 6 脚本复测。
+1. 回到阶段 5，把稳定区分真/假突破的特征转成更严格的交易前过滤规则，重点降低高 ATR 噪声、单日量突刺和高失真候选。
+2. 在阶段 4/6 中增加最低分数、低失真、高流动性和板块集中度约束，再和 `n_drop=1`、`hold_thresh=5` 组合复测。
+3. 对持仓和交易日志做归因，区分剩余亏损来自信号方向、候选质量、板块暴露还是执行价回退。
 4. 单独审计 `$open` 和 `$vwap` 缺失样本，避免 vwap 缺失时静默回退 close price 污染 open/vwap 对比。
 5. 只有在低/中成本下留出期成本后超额不再整体为负、且换手回到可解释范围后，再进入阶段 7 自定义事件策略。

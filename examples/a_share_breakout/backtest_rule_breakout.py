@@ -37,8 +37,8 @@ from mylib.stage6_metrics import (
     audit_deal_price_availability,
     build_cost_sensitivity,
     run_portfolio_backtest,
-    write_markdown_report,
 )
+from mylib.stage6_report import write_markdown_report
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -63,8 +63,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--cost-scenario", nargs="+", default=list(DEFAULT_COST_SCENARIOS))
     parser.add_argument("--topk", type=int, default=10)
     parser.add_argument("--n-drop", type=int, default=3)
+    parser.add_argument("--hold-thresh", type=int, default=1)
     parser.add_argument("--risk-degree", type=float, default=0.95)
     parser.add_argument("--account", type=int, default=100000000)
+    parser.add_argument("--output-prefix", default="")
     return parser.parse_args(argv)
 
 
@@ -120,6 +122,7 @@ def run_stage6(args: argparse.Namespace) -> Dict[str, pd.DataFrame]:
                     benchmark=args.benchmark,
                     topk=args.topk,
                     n_drop=args.n_drop,
+                    hold_thresh=args.hold_thresh,
                     risk_degree=args.risk_degree,
                     account=args.account,
                 )
@@ -134,16 +137,18 @@ def run_stage6(args: argparse.Namespace) -> Dict[str, pd.DataFrame]:
     audit_df = pd.concat(audit_frames, ignore_index=True) if audit_frames else pd.DataFrame()
     sensitivity_df = build_cost_sensitivity(summary_df)
 
-    summary_df.to_csv(output_dir / "baseline_backtest_summary.csv", index=False)
-    sensitivity_df.to_csv(output_dir / "cost_sensitivity.csv", index=False)
-    yearly_df.to_csv(output_dir / "baseline_yearly_returns.csv", index=False)
-    board_df.to_csv(output_dir / "baseline_board_exposure.csv", index=False)
-    audit_df.to_csv(output_dir / "deal_price_availability_audit.csv", index=False)
+    prefix = args.output_prefix
+    summary_df.to_csv(output_dir / f"{prefix}baseline_backtest_summary.csv", index=False)
+    sensitivity_df.to_csv(output_dir / f"{prefix}cost_sensitivity.csv", index=False)
+    yearly_df.to_csv(output_dir / f"{prefix}baseline_yearly_returns.csv", index=False)
+    board_df.to_csv(output_dir / f"{prefix}baseline_board_exposure.csv", index=False)
+    audit_df.to_csv(output_dir / f"{prefix}deal_price_availability_audit.csv", index=False)
     write_markdown_report(
         summary=summary_df,
         cost_sensitivity=sensitivity_df,
         audit=audit_df,
-        output_path=output_dir / "baseline_backtest_report.md",
+        output_path=output_dir / f"{prefix}baseline_backtest_report.md",
+        output_prefix=prefix,
     )
     return {
         "summary": summary_df,

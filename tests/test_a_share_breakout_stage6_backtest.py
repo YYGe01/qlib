@@ -15,6 +15,7 @@ from mylib.stage6_config import (  # noqa: E402
     load_cost_scenarios,
 )
 from mylib.stage6_metrics import build_cost_sensitivity, extract_portfolio_summary  # noqa: E402
+from mylib.stage6_report import write_markdown_report  # noqa: E402
 
 
 def test_cost_scenarios_load_exchange_costs():
@@ -39,10 +40,12 @@ def test_port_analysis_config_uses_topk_dropout_and_impact_cost():
         backtest_start="2025-01-02",
         backtest_end="2026-04-17",
         benchmark="SH000300",
+        hold_thresh=5,
     )
 
     assert config["strategy"]["class"] == "TopkDropoutStrategy"
     assert config["strategy"]["kwargs"]["only_tradable"] is True
+    assert config["strategy"]["kwargs"]["hold_thresh"] == 5
     assert config["backtest"]["exchange_kwargs"]["deal_price"] == "open"
     assert config["backtest"]["exchange_kwargs"]["impact_cost"] == 0.0005
 
@@ -129,3 +132,66 @@ def test_stage6_workflow_configs_cover_four_neutral_baselines():
         assert exchange["open_cost"] == 0.0005
         assert exchange["close_cost"] == 0.0015
         assert exchange["impact_cost"] == 0.0005
+
+
+def test_stage6_report_includes_strategy_params_and_output_prefix(tmp_path):
+    summary = pd.DataFrame(
+        [
+            {
+                "baseline": "baseline_60d_open",
+                "recorder": "mlruns/1/abc",
+                "cost_scenario": "neutral",
+                "breakout_window": 60,
+                "deal_price": "open",
+                "topk": 10,
+                "n_drop": 1,
+                "hold_thresh": 5,
+                "annualized_return_with_cost": -0.10,
+                "excess_ann_return_with_cost": -0.20,
+                "max_drawdown_with_cost": -0.30,
+                "excess_information_ratio_with_cost": -1.5,
+                "avg_turnover": 0.04,
+                "avg_holding_days_proxy": 25.0,
+            }
+        ]
+    )
+    cost_sensitivity = pd.DataFrame(
+        [
+            {
+                "baseline": "baseline_60d_open",
+                "breakout_window": 60,
+                "deal_price": "open",
+                "cost_scenario": "neutral",
+                "excess_ann_return_with_cost": -0.20,
+                "delta_vs_low_cost_excess_ann_return": -0.05,
+                "annualized_cost": 0.03,
+            }
+        ]
+    )
+    audit = pd.DataFrame(
+        [
+            {
+                "breakout_window": 60,
+                "deal_price": "open",
+                "board": "ALL",
+                "execution_rows": 100,
+                "missing_deal_price_rate": 0.01,
+                "tradable_proxy_rate": 0.99,
+                "missing_close": 0,
+                "zero_or_missing_volume": 1,
+            }
+        ]
+    )
+
+    output_path = tmp_path / "report.md"
+    write_markdown_report(
+        summary=summary,
+        cost_sensitivity=cost_sensitivity,
+        audit=audit,
+        output_path=output_path,
+        output_prefix="turnover_hold5_",
+    )
+
+    report = output_path.read_text(encoding="utf-8")
+    assert "| baseline_60d_open | `mlruns/1/abc` | 10 | 1 | 5 |" in report
+    assert "`turnover_hold5_baseline_backtest_summary.csv`" in report

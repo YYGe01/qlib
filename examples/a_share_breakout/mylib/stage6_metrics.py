@@ -1,10 +1,9 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
-"""Metrics, audit, and report helpers for stage 6 breakout backtests."""
+"""Metrics and audit helpers for stage 6 breakout backtests."""
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Dict, List, Mapping, Sequence, Tuple
 
 import numpy as np
@@ -216,6 +215,7 @@ def run_portfolio_backtest(
     benchmark: str,
     topk: int,
     n_drop: int,
+    hold_thresh: int,
     risk_degree: float,
     account: int,
 ) -> Tuple[Dict[str, object], pd.DataFrame, pd.DataFrame]:
@@ -229,6 +229,7 @@ def run_portfolio_backtest(
         benchmark=benchmark,
         topk=topk,
         n_drop=n_drop,
+        hold_thresh=hold_thresh,
         risk_degree=risk_degree,
         account=account,
     )
@@ -238,6 +239,7 @@ def run_portfolio_backtest(
         "cost_scenario": scenario.name,
         "topk": topk,
         "n_drop": n_drop,
+        "hold_thresh": hold_thresh,
         "risk_degree": risk_degree,
         "backtest_start": backtest_start,
         "backtest_end": backtest_end,
@@ -255,7 +257,7 @@ def run_portfolio_backtest(
         if not artifacts:
             raise RuntimeError(f"PortAnaRecord did not generate artifacts for {experiment_name}")
 
-    return extract_portfolio_summary(
+    summary, yearly, board = extract_portfolio_summary(
         report=artifacts["report_normal_1day.pkl"],
         analysis_df=artifacts["port_analysis_1day.pkl"],
         positions=artifacts["positions_normal_1day.pkl"],
@@ -267,6 +269,8 @@ def run_portfolio_backtest(
         backtest_start=backtest_start,
         backtest_end=backtest_end,
     )
+    summary.update({"topk": int(topk), "n_drop": int(n_drop), "hold_thresh": int(hold_thresh)})
+    return summary, yearly, board
 
 
 def _normalize_quote_index(quote: pd.DataFrame) -> pd.DataFrame:
@@ -385,115 +389,3 @@ def build_cost_sensitivity(summary: pd.DataFrame) -> pd.DataFrame:
                 }
             )
     return pd.DataFrame(rows)
-
-
-def _fmt_pct(value: object) -> str:
-    if pd.isna(value):
-        return "NA"
-    return f"{float(value) * 100:.2f}%"
-
-
-def _fmt_num(value: object, digits: int = 2) -> str:
-    if pd.isna(value):
-        return "NA"
-    return f"{float(value):.{digits}f}"
-
-
-def write_markdown_report(
-    *,
-    summary: pd.DataFrame,
-    cost_sensitivity: pd.DataFrame,
-    audit: pd.DataFrame,
-    output_path: Path,
-) -> None:
-    neutral = summary[summary["cost_scenario"] == "neutral"].copy()
-    lines = [
-        "# A 股日线突破阶段 6 组合回测报告",
-        "",
-        "本报告由 `examples/a_share_breakout/backtest_rule_breakout.py` 生成。",
-        "阶段 6 只验证无训练规则信号的 TopK Dropout MVP，不构成策略有效性结论。",
-        "",
-        "## 中性成本 baseline",
-        "",
-        "| baseline | recorder | 年化收益(成本后) | 成本后超额年化 | 最大回撤 | 超额 IR | 日均换手 | 持有天数代理 |",
-        "|---|---|---:|---:|---:|---:|---:|---:|",
-    ]
-    for _, row in neutral.sort_values(["breakout_window", "deal_price"]).iterrows():
-        lines.append(
-            "| {baseline} | `{recorder}` | {ann} | {excess} | {mdd} | {ir} | {turnover} | {hold} |".format(
-                baseline=row["baseline"],
-                recorder=row["recorder"],
-                ann=_fmt_pct(row["annualized_return_with_cost"]),
-                excess=_fmt_pct(row["excess_ann_return_with_cost"]),
-                mdd=_fmt_pct(row["max_drawdown_with_cost"]),
-                ir=_fmt_num(row["excess_information_ratio_with_cost"]),
-                turnover=_fmt_pct(row["avg_turnover"]),
-                hold=_fmt_num(row["avg_holding_days_proxy"]),
-            )
-        )
-
-    all_neutral_non_positive = bool((neutral["excess_ann_return_with_cost"] <= 0).all()) if not neutral.empty else False
-    lines.extend(
-        [
-            "",
-            "## 成本敏感性",
-            "",
-            "| baseline | cost | 成本后超额年化 | 相对低成本差异 | 年化成本 |",
-            "|---|---|---:|---:|---:|",
-        ]
-    )
-    for _, row in cost_sensitivity.sort_values(["breakout_window", "deal_price", "cost_scenario"]).iterrows():
-        lines.append(
-            "| {baseline} | {cost} | {excess} | {delta} | {cost_ann} |".format(
-                baseline=row["baseline"],
-                cost=row["cost_scenario"],
-                excess=_fmt_pct(row["excess_ann_return_with_cost"]),
-                delta=_fmt_pct(row["delta_vs_low_cost_excess_ann_return"]),
-                cost_ann=_fmt_pct(row["annualized_cost"]),
-            )
-        )
-
-    audit_all = audit[audit["board"] == "ALL"] if not audit.empty else audit
-    lines.extend(
-        [
-            "",
-            "## Open/VWAP 可成交性审计",
-            "",
-            "| window | deal_price | execution rows | 缺成交价率 | 可交易代理率 | 缺 close | 成交量缺失或为 0 |",
-            "|---:|---|---:|---:|---:|---:|---:|",
-        ]
-    )
-    for _, row in audit_all.sort_values(["breakout_window", "deal_price"]).iterrows():
-        lines.append(
-            "| {window} | {price} | {rows} | {missing} | {tradable} | {missing_close} | {volume} |".format(
-                window=int(row["breakout_window"]),
-                price=row["deal_price"],
-                rows=int(row["execution_rows"]),
-                missing=_fmt_pct(row["missing_deal_price_rate"]),
-                tradable=_fmt_pct(row["tradable_proxy_rate"]),
-                missing_close=int(row["missing_close"]),
-                volume=int(row["zero_or_missing_volume"]),
-            )
-        )
-
-    lines.extend(
-        [
-            "",
-            "## 结论门槛",
-            "",
-            (
-                "中性成本下四组 baseline 的成本后超额年化均不为正；按计划应暂停进入阶段 7，回到事件研究和过滤规则修正。"
-                if all_neutral_non_positive
-                else "至少一组中性成本 baseline 的成本后超额年化为正；仍需结合年度、板块、成交价和成本压力测试后再决定是否进入阶段 7。"
-            ),
-            "",
-            "## 输出文件",
-            "",
-            "- `baseline_backtest_summary.csv`：12 组组合回测摘要。",
-            "- `cost_sensitivity.csv`：低/中/高成本敏感性长表。",
-            "- `baseline_yearly_returns.csv`：分年度收益、基准和成本。",
-            "- `baseline_board_exposure.csv`：持仓板块暴露，非收益贡献归因。",
-            "- `deal_price_availability_audit.csv`：open/vwap 可成交性审计。",
-        ]
-    )
-    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")

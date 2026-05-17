@@ -176,6 +176,7 @@ def build_port_analysis_config(
     benchmark: str,
     topk: int = 10,
     n_drop: int = 3,
+    hold_thresh: int = 1,
     risk_degree: float = 0.95,
     account: int = 100000000,
 ) -> Dict[str, object]:
@@ -188,6 +189,7 @@ def build_port_analysis_config(
                 "signal": signal,
                 "topk": int(topk),
                 "n_drop": int(n_drop),
+                "hold_thresh": int(hold_thresh),
                 "risk_degree": float(risk_degree),
                 "only_tradable": True,
             },

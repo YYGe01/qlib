@@ -244,13 +244,28 @@ python examples/a_share_breakout/backtest_rule_breakout.py \
   --cost-scenario low neutral high
 ```
 
+可选调仓控制参数：
+
+```bash
+python examples/a_share_breakout/backtest_rule_breakout.py \
+  --provider-uri ~/.qlib/qlib_data/cn_data \
+  --output-dir examples/a_share_breakout/outputs \
+  --breakout-window 60 120 \
+  --deal-price open vwap \
+  --cost-scenario neutral \
+  --n-drop 1 \
+  --hold-thresh 5 \
+  --output-prefix turnover_hold5_
+```
+
 阶段 6 新增文件：
 
 | 文件 | 用途 |
 |---|---|
 | `backtest_rule_breakout.py` | 阶段 6 CLI 入口，批量生成规则预测、运行组合回测、输出摘要和报告。 |
 | `mylib/stage6_config.py` | 成本场景、数据集、模型和 `PortAnaRecord` 配置构建。 |
-| `mylib/stage6_metrics.py` | 组合指标提取、open/vwap 可成交性审计、成本敏感性和 Markdown 报告。 |
+| `mylib/stage6_metrics.py` | 组合指标提取、open/vwap 可成交性审计和成本敏感性。 |
+| `mylib/stage6_report.py` | Markdown 报告生成，和指标/审计逻辑分离。 |
 | `configs/cost_scenarios.yaml` | 低/中/高成本场景，包含 `open_cost`、`close_cost`、`impact_cost` 和 `min_cost`。 |
 | `configs/workflow_baseline_*` | 四组中性成本 qrun baseline：60/120 日 × open/vwap。 |
 
@@ -276,6 +291,17 @@ python examples/a_share_breakout/backtest_rule_breakout.py \
 
 成本敏感性结论：低成本场景下四组 baseline 成本后超额年化仍全部为负；中性成本和高成本进一步恶化。按实施计划，当前不应直接进入阶段 7 自定义事件策略，应先回到事件研究、候选过滤和 TopK 换手问题修正规则。
 
+阶段 6.1 换手控制诊断使用中性成本、`n_drop=1`、`hold_thresh=5`，输出前缀为 `turnover_hold5_`：
+
+| baseline | 成本后超额年化 | 日均换手 | 持有天数代理 | 相对原中性成本超额改善 | 换手下降 |
+|---|---:|---:|---:|---:|---:|
+| `baseline_60d_open` | -64.64% | 3.80% | 26.35 | +113.93 pct | -34.82 pct |
+| `baseline_60d_vwap` | -51.71% | 2.92% | 34.27 | +110.14 pct | -39.38 pct |
+| `baseline_120d_open` | -61.43% | 5.71% | 17.51 | +149.78 pct | -42.36 pct |
+| `baseline_120d_vwap` | -61.65% | 5.81% | 17.21 | +119.36 pct | -46.71 pct |
+
+结论：降低强制换手并增加最低持有阈值可以显著降低交易成本拖累，但四组成本后超额仍为负；下一步应优先把阶段 5 的稳定区分特征转成交易前过滤和打分约束，而不是直接进入阶段 7。
+
 open/vwap 可成交性审计：
 
 | window | deal_price | execution rows | 缺成交价率 | 可交易代理率 |
@@ -289,6 +315,7 @@ open/vwap 可成交性审计：
 
 | 命令 | 结果 |
 |---|---|
-| `python -m py_compile examples/a_share_breakout/backtest_rule_breakout.py examples/a_share_breakout/mylib/stage6_config.py examples/a_share_breakout/mylib/stage6_metrics.py` | 通过 |
+| `python -m py_compile examples/a_share_breakout/backtest_rule_breakout.py examples/a_share_breakout/mylib/stage6_config.py examples/a_share_breakout/mylib/stage6_metrics.py examples/a_share_breakout/mylib/stage6_report.py` | 通过 |
 | `pytest -q tests/test_a_share_breakout_stage6_backtest.py` | 通过：4 个测试 |
 | `python examples/a_share_breakout/backtest_rule_breakout.py --provider-uri ~/.qlib/qlib_data/cn_data --output-dir examples/a_share_breakout/outputs --breakout-window 60 120 --deal-price open vwap --cost-scenario low neutral high` | 通过，并生成 12 组回测、成本敏感性、年度收益、板块暴露和 open/vwap 审计 |
+| `python examples/a_share_breakout/backtest_rule_breakout.py --provider-uri ~/.qlib/qlib_data/cn_data --output-dir examples/a_share_breakout/outputs --breakout-window 60 120 --deal-price open vwap --cost-scenario neutral --n-drop 1 --hold-thresh 5 --output-prefix turnover_hold5_` | 通过，并生成 4 组换手控制诊断回测 |
