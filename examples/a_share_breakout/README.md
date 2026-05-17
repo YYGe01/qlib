@@ -327,6 +327,30 @@ python examples/a_share_breakout/backtest_rule_breakout.py \
 
 对照诊断：60 日 open 使用 `--signal-mode active` 后，预测行数从 50,228 增至 225,388，日均换手升至 55.59%，成本后超额年化恶化至 -209.84%。因此问题不是“持有期内没有分数”这么单一；简单扩大可买池会引入大量旧突破候选。当前修正采用“只买当日新突破 + 最低持有 20 天”，能显著降低机械换手，但策略质量仍不足以支撑进入复杂事件策略。
 
+阶段 6.3 候选质量过滤尝试：
+
+阶段 6 CLI 已增加交易前过滤参数：`--min-score`、`--min-breakout-strength`、`--min-relative-strength-rank`、`--min-volume-persistence-rank`、`--min-amount-rank`、`--max-atr-noise-rank`、`--max-fake-prob`、`--max-limit-dependency`。这些过滤只作用于 `pred.pkl` 生成，不使用未来标签。
+
+60 日 open 中性成本对照：
+
+| 实验 | 过滤参数 | pred rows | 成本后超额年化 | 日均换手 | 结论 |
+|---|---|---:|---:|---:|---|
+| `current_hold20` | 无新增过滤 | 50,228 | -75.20% | 3.40% | 持有修正后仍为负 |
+| `filter_liq_noise_60_open` | `amount_rank>=0.7, atr_noise<=0.8, limit_dependency<=0.8` | 23,755 | -28.70% | 3.13% | 明显改善但未转正 |
+| `filter_trend_quality_60_open` | `breakout_strength>=1.0, relative_rank>=0.6, volume_rank>=0.5, amount_rank>=0.7` | 21,513 | -86.01% | 5.33% | 硬趋势过滤恶化 |
+| `filter_distortion_60_open` | `amount_rank>=0.7, fake_prob<=0.6, limit_dependency<=0.6` | 23,121 | -39.15% | 3.92% | 有改善但弱于流动性/噪声过滤 |
+
+将当前较优的流动性/噪声过滤扩到四组中性成本：
+
+| baseline | 成本后超额年化 | 日均换手 | 备注 |
+|---|---:|---:|---|
+| `baseline_60d_open` | -28.70% | 3.13% | 最有改善，但仍未达进入阶段 7 门槛 |
+| `baseline_60d_vwap` | -27.77% | 3.12% | 与 open 接近 |
+| `baseline_120d_open` | -113.10% | 5.12% | 120 日窗口继续较差 |
+| `baseline_120d_vwap` | +7838.56% | 3.84% | 不采信：2026-01-13 单日组合收益约 +103 倍，需审计成交价/复权/持仓 |
+
+结论：`amount_rank>=0.7`、`atr_noise<=0.8`、`limit_dependency<=0.8` 是当前最有用的一组过滤，但仍只能把 60 日成本后超额年化改善到约 -28%。下一步不应继续扩大 TopK 网格，而应审计 2026-01-13 的 vwap 异常，并把 60 日过滤规则与更低换手、最低分数、板块约束组合验证。
+
 open/vwap 可成交性审计：
 
 | window | deal_price | execution rows | 缺成交价率 | 可交易代理率 |

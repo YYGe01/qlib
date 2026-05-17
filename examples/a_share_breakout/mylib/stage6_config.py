@@ -42,6 +42,16 @@ DEFAULT_ACTIVE_WINDOW = 20
 DEFAULT_HOLD_ATR_BUFFER = 1.2
 DEFAULT_HOLD_REQUIRES_MA = True
 DEFAULT_HOLD_THRESH = 20
+FILTER_KWARGS = (
+    "min_score",
+    "min_breakout_strength",
+    "min_relative_strength_rank",
+    "min_volume_persistence_rank",
+    "min_amount_rank",
+    "max_atr_noise_rank",
+    "max_fake_prob",
+    "max_limit_dependency",
+)
 
 
 @dataclass(frozen=True)
@@ -170,17 +180,37 @@ def build_model_config(
     active_window: int = DEFAULT_ACTIVE_WINDOW,
     hold_atr_buffer: float = DEFAULT_HOLD_ATR_BUFFER,
     hold_requires_ma: bool = DEFAULT_HOLD_REQUIRES_MA,
+    min_score: Optional[float] = None,
+    min_breakout_strength: Optional[float] = None,
+    min_relative_strength_rank: Optional[float] = None,
+    min_volume_persistence_rank: Optional[float] = None,
+    min_amount_rank: Optional[float] = None,
+    max_atr_noise_rank: Optional[float] = None,
+    max_fake_prob: Optional[float] = None,
+    max_limit_dependency: Optional[float] = None,
 ) -> Dict[str, object]:
+    kwargs = {
+        "breakout_window": int(breakout_window),
+        "signal_mode": signal_mode,
+        "active_window": int(active_window),
+        "hold_atr_buffer": float(hold_atr_buffer),
+        "hold_requires_ma": bool(hold_requires_ma),
+    }
+    filter_values = {
+        "min_score": min_score,
+        "min_breakout_strength": min_breakout_strength,
+        "min_relative_strength_rank": min_relative_strength_rank,
+        "min_volume_persistence_rank": min_volume_persistence_rank,
+        "min_amount_rank": min_amount_rank,
+        "max_atr_noise_rank": max_atr_noise_rank,
+        "max_fake_prob": max_fake_prob,
+        "max_limit_dependency": max_limit_dependency,
+    }
+    kwargs.update({key: float(value) for key, value in filter_values.items() if value is not None})
     return {
         "class": "RuleSignalModel",
         "module_path": "mylib.model",
-        "kwargs": {
-            "breakout_window": int(breakout_window),
-            "signal_mode": signal_mode,
-            "active_window": int(active_window),
-            "hold_atr_buffer": float(hold_atr_buffer),
-            "hold_requires_ma": bool(hold_requires_ma),
-        },
+        "kwargs": kwargs,
     }
 
 
@@ -246,6 +276,14 @@ def generate_prediction(
     active_window: int = DEFAULT_ACTIVE_WINDOW,
     hold_atr_buffer: float = DEFAULT_HOLD_ATR_BUFFER,
     hold_requires_ma: bool = DEFAULT_HOLD_REQUIRES_MA,
+    min_score: Optional[float] = None,
+    min_breakout_strength: Optional[float] = None,
+    min_relative_strength_rank: Optional[float] = None,
+    min_volume_persistence_rank: Optional[float] = None,
+    min_amount_rank: Optional[float] = None,
+    max_atr_noise_rank: Optional[float] = None,
+    max_fake_prob: Optional[float] = None,
+    max_limit_dependency: Optional[float] = None,
 ) -> pd.DataFrame:
     dataset = init_instance_by_config(
         build_dataset_config(
@@ -268,6 +306,14 @@ def generate_prediction(
             active_window=active_window,
             hold_atr_buffer=hold_atr_buffer,
             hold_requires_ma=hold_requires_ma,
+            min_score=min_score,
+            min_breakout_strength=min_breakout_strength,
+            min_relative_strength_rank=min_relative_strength_rank,
+            min_volume_persistence_rank=min_volume_persistence_rank,
+            min_amount_rank=min_amount_rank,
+            max_atr_noise_rank=max_atr_noise_rank,
+            max_fake_prob=max_fake_prob,
+            max_limit_dependency=max_limit_dependency,
         )
     )
     model.fit(dataset)

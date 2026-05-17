@@ -59,6 +59,20 @@ def test_model_config_defaults_to_entry_signal_with_20_day_hold():
     assert config["kwargs"]["active_window"] == 20
     assert config["kwargs"]["hold_atr_buffer"] == 1.2
     assert config["kwargs"]["hold_requires_ma"] is True
+    assert "min_amount_rank" not in config["kwargs"]
+
+
+def test_model_config_includes_quality_filters_when_requested():
+    config = build_model_config(
+        60,
+        min_amount_rank=0.7,
+        max_fake_prob=0.6,
+        max_limit_dependency=0.8,
+    )
+
+    assert config["kwargs"]["min_amount_rank"] == 0.7
+    assert config["kwargs"]["max_fake_prob"] == 0.6
+    assert config["kwargs"]["max_limit_dependency"] == 0.8
 
 
 def test_extract_summary_and_cost_sensitivity_from_sample_report():
@@ -113,12 +127,19 @@ def test_extract_summary_and_cost_sensitivity_from_sample_report():
         active_window=20,
         hold_atr_buffer=1.2,
         hold_requires_ma=True,
+        min_amount_rank=0.7,
+        max_fake_prob=0.6,
     )
     sensitivity = build_cost_sensitivity(pd.DataFrame([summary | {"cost_scenario": "low"}, summary]))
 
     assert summary["baseline"] == "baseline_60d_open"
     assert summary["excess_ann_return_with_cost"] == 0.20
     assert summary["avg_holding_days_proxy"] == pytest.approx(5.0)
+    assert summary["min_amount_rank"] == 0.7
+    assert summary["max_fake_prob"] == 0.6
+    assert summary["max_daily_return_without_cost"] == 0.03
+    assert summary["min_daily_return_without_cost"] == -0.02
+    assert summary["has_suspicious_daily_return"] is False
     assert yearly.loc[0, "year"] == 2025
     assert set(board["board"]) == {"主板", "创业板"}
     assert "delta_vs_low_cost_excess_ann_return" in sensitivity.columns

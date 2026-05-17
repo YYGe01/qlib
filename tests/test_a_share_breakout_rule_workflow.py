@@ -49,6 +49,7 @@ def _feature_frame() -> pd.DataFrame:
     frame["MA20_SLOPE_20"] = [0.05, 0.01, 0.08, -0.02, 0.03, 0.02]
     frame["REL_STRENGTH_20D"] = [0.10, 0.03, 0.20, -0.01, 0.08, 0.05]
     frame["VOL_RATIO_3D"] = [2.0, 1.1, 3.0, 1.2, 0.8, 1.5]
+    frame["AMOUNT_RANK_252"] = [0.8, 0.4, 0.9, 0.5, 0.7, 0.9]
     frame["ATR_NOISE_RANK_252"] = [0.2, 0.6, 0.1, 0.5, 0.4, 0.3]
     frame["BB_WIDTH_RANK_252"] = [0.3, 0.5, 0.2, 0.4, 0.8, 0.3]
     frame["FAKE_PROB_DAILY_T_RAW_60D"] = [0.1, 0.8, 0.1, 0.3, 0.2, 0.1]
@@ -89,6 +90,24 @@ def test_rule_signal_model_keeps_recent_breakouts_active_for_holding():
     assert (pd.Timestamp("2025-01-03"), "SH600000") in pred.index
     assert (pd.Timestamp("2025-01-06"), "SH600000") in pred.index
     assert (pd.Timestamp("2025-01-07"), "SH600000") not in pred.index
+
+
+def test_rule_signal_model_applies_quality_filters():
+    dataset = _Dataset(_feature_frame())
+    model = RuleSignalModel(
+        breakout_window=60,
+        signal_mode="current",
+        min_amount_rank=0.7,
+        min_volume_persistence_rank=0.5,
+        max_limit_dependency=0.5,
+    )
+
+    pred = model.predict(dataset)
+
+    assert (pd.Timestamp("2025-01-02"), "SH600000") in pred.index
+    assert (pd.Timestamp("2025-01-02"), "SZ000001") not in pred.index
+    assert (pd.Timestamp("2025-01-03"), "SH600000") not in pred.index
+    assert (pd.Timestamp("2025-01-03"), "SH600010") in pred.index
 
 
 def test_rule_signal_model_reports_missing_feature_columns():

@@ -86,6 +86,14 @@ class RuleSignalModel(Model):
         active_window: int = 20,
         hold_atr_buffer: float = 1.2,
         hold_requires_ma: bool = True,
+        min_score: Optional[float] = None,
+        min_breakout_strength: Optional[float] = None,
+        min_relative_strength_rank: Optional[float] = None,
+        min_volume_persistence_rank: Optional[float] = None,
+        min_amount_rank: Optional[float] = None,
+        max_atr_noise_rank: Optional[float] = None,
+        max_fake_prob: Optional[float] = None,
+        max_limit_dependency: Optional[float] = None,
         score_name: str = "trend_score",
     ):
         if signal_mode not in VALID_SIGNAL_MODES:
@@ -101,6 +109,14 @@ class RuleSignalModel(Model):
         self.active_window = int(active_window)
         self.hold_atr_buffer = float(hold_atr_buffer)
         self.hold_requires_ma = bool(hold_requires_ma)
+        self.min_score = min_score
+        self.min_breakout_strength = min_breakout_strength
+        self.min_relative_strength_rank = min_relative_strength_rank
+        self.min_volume_persistence_rank = min_volume_persistence_rank
+        self.min_amount_rank = min_amount_rank
+        self.max_atr_noise_rank = max_atr_noise_rank
+        self.max_fake_prob = max_fake_prob
+        self.max_limit_dependency = max_limit_dependency
         self.score_name = score_name
         self.is_fitted = False
 
@@ -117,6 +133,7 @@ class RuleSignalModel(Model):
             "MA20_SLOPE_20",
             "REL_STRENGTH_20D",
             "VOL_RATIO_3D",
+            "AMOUNT_RANK_252",
             "ATR_NOISE_RANK_252",
             "BB_WIDTH_RANK_252",
             f"FAKE_PROB_DAILY_T_RAW_{self.suffix}",
@@ -181,6 +198,25 @@ class RuleSignalModel(Model):
                     hold_ok &= _finite_series(frame["MA20_GT_MA60"]) > 0.5
                 eligible = active_after_breakout & (candidate | hold_ok)
             score = score.where(eligible)
+
+        quality_mask = pd.Series(True, index=frame.index)
+        if self.min_score is not None:
+            quality_mask &= score.ge(float(self.min_score))
+        if self.min_breakout_strength is not None:
+            quality_mask &= breakout_strength.ge(float(self.min_breakout_strength))
+        if self.min_relative_strength_rank is not None:
+            quality_mask &= relative_strength.ge(float(self.min_relative_strength_rank))
+        if self.min_volume_persistence_rank is not None:
+            quality_mask &= volume_persistence.ge(float(self.min_volume_persistence_rank))
+        if self.min_amount_rank is not None:
+            quality_mask &= _finite_series(frame["AMOUNT_RANK_252"], default=0.0).ge(float(self.min_amount_rank))
+        if self.max_atr_noise_rank is not None:
+            quality_mask &= atr_noise_rank.le(float(self.max_atr_noise_rank))
+        if self.max_fake_prob is not None:
+            quality_mask &= fake_prob.le(float(self.max_fake_prob))
+        if self.max_limit_dependency is not None:
+            quality_mask &= limit_dependency.le(float(self.max_limit_dependency))
+        score = score.where(quality_mask)
 
         score = score.replace([np.inf, -np.inf], np.nan).dropna()
         score.name = self.score_name

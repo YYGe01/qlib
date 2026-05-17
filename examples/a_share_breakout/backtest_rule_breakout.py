@@ -20,6 +20,7 @@ from mylib.stage6_config import (
     DEFAULT_DATA_END,
     DEFAULT_DATA_START,
     DEFAULT_DEAL_PRICES,
+    FILTER_KWARGS,
     DEFAULT_FIT_END,
     DEFAULT_FIT_START,
     DEFAULT_HOLD_ATR_BUFFER,
@@ -79,6 +80,14 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--risk-degree", type=float, default=0.95)
     parser.add_argument("--account", type=int, default=100000000)
+    parser.add_argument("--min-score", type=float, default=None)
+    parser.add_argument("--min-breakout-strength", type=float, default=None)
+    parser.add_argument("--min-relative-strength-rank", type=float, default=None)
+    parser.add_argument("--min-volume-persistence-rank", type=float, default=None)
+    parser.add_argument("--min-amount-rank", type=float, default=None)
+    parser.add_argument("--max-atr-noise-rank", type=float, default=None)
+    parser.add_argument("--max-fake-prob", type=float, default=None)
+    parser.add_argument("--max-limit-dependency", type=float, default=None)
     parser.add_argument("--output-prefix", default="")
     return parser.parse_args(argv)
 
@@ -99,6 +108,7 @@ def run_stage6(args: argparse.Namespace) -> Dict[str, pd.DataFrame]:
     yearly_frames: List[pd.DataFrame] = []
     board_frames: List[pd.DataFrame] = []
     audit_frames: List[pd.DataFrame] = []
+    filter_kwargs = {key: getattr(args, key) for key in FILTER_KWARGS}
 
     for window in args.breakout_window:
         print(f"[stage6] generating {window}d prediction")
@@ -117,6 +127,7 @@ def run_stage6(args: argparse.Namespace) -> Dict[str, pd.DataFrame]:
             active_window=args.active_window,
             hold_atr_buffer=args.hold_atr_buffer,
             hold_requires_ma=args.hold_requires_ma,
+            **filter_kwargs,
         )
         print(
             f"[stage6] {window}d prediction rows={len(pred)}, "
@@ -146,6 +157,7 @@ def run_stage6(args: argparse.Namespace) -> Dict[str, pd.DataFrame]:
                     active_window=args.active_window,
                     hold_atr_buffer=args.hold_atr_buffer,
                     hold_requires_ma=args.hold_requires_ma,
+                    **filter_kwargs,
                 )
                 summaries.append(summary)
                 yearly_frames.append(yearly)

@@ -857,6 +857,43 @@ python examples/a_share_breakout/backtest_rule_breakout.py
 
 对照诊断：`signal_mode=active` 在 60 日 open 中性成本下将预测行数从 50,228 扩大到 225,388，日均换手升至 55.59%，成本后超额年化恶化至 -209.84%。结论是：T+1 无分数导致过早卖出确实是重要拖累，修正后约改善 76 至 103 个百分点；但负收益没有消失，根因还包括候选质量、打分方向和 TopK 买入旧/弱趋势样本的约束不足。
 
+阶段 6.3 候选质量过滤尝试：
+
+新增可选过滤参数：
+
+```text
+--min-score
+--min-breakout-strength
+--min-relative-strength-rank
+--min-volume-persistence-rank
+--min-amount-rank
+--max-atr-noise-rank
+--max-fake-prob
+--max-limit-dependency
+```
+
+这些参数只使用 T 日可见特征，在 `RuleSignalModel.predict()` 输出 `pred.pkl` 前过滤低质量候选。
+
+60 日 open 中性成本三组对照：
+
+| 实验 | 过滤 | 成本后超额年化 | 日均换手 |
+|---|---|---:|---:|
+| `current_hold20` | 无新增过滤 | -75.20% | 3.40% |
+| `filter_liq_noise_60_open` | `amount_rank>=0.7, atr_noise<=0.8, limit_dependency<=0.8` | -28.70% | 3.13% |
+| `filter_trend_quality_60_open` | `breakout_strength>=1.0, relative_rank>=0.6, volume_rank>=0.5, amount_rank>=0.7` | -86.01% | 5.33% |
+| `filter_distortion_60_open` | `amount_rank>=0.7, fake_prob<=0.6, limit_dependency<=0.6` | -39.15% | 3.92% |
+
+流动性/噪声过滤扩展到四组：
+
+| baseline | 成本后超额年化 | 日均换手 | 备注 |
+|---|---:|---:|---|
+| `baseline_60d_open` | -28.70% | 3.13% | 明显改善但仍为负 |
+| `baseline_60d_vwap` | -27.77% | 3.12% | 与 open 接近 |
+| `baseline_120d_open` | -113.10% | 5.12% | 120 日窗口较差 |
+| `baseline_120d_vwap` | +7838.56% | 3.84% | 不采信；2026-01-13 单日组合收益约 +103 倍，需要成交价/复权/持仓审计 |
+
+阶段结论：候选质量过滤确实有效，尤其是成交额分位、ATR 噪声和涨停依赖过滤；但 60 日过滤后仍未转正，120 日 open 继续恶化，120 日 vwap 出现异常单日收益不能作为策略成功证据。后续应先做异常交易归因和更严格的 60 日候选约束。
+
 ### 10.5 是否使用 Qlib
 
 此阶段核心使用 Qlib 的 qrun、record、strategy、exchange 和 backtest 能力。

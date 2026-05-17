@@ -609,6 +609,15 @@ qlib 实现方式：
 - 对照诊断显示，60 日 open 使用 `signal_mode=active` 后预测行数从 50,228 扩至 225,388，日均换手升至 55.59%，成本后超额年化恶化至 -209.84%。结论是过早卖出是重要拖累但不是全部根因，简单扩大可买池不可取。
 - 已通过 `python3 -m py_compile examples/a_share_breakout/mylib/model.py examples/a_share_breakout/mylib/stage6_config.py examples/a_share_breakout/mylib/stage6_metrics.py examples/a_share_breakout/backtest_rule_breakout.py` 和 `PYTHONPATH=. python3 -m pytest -q tests/test_a_share_breakout_rule_workflow.py tests/test_a_share_breakout_stage6_backtest.py`。
 
+阶段 6.3 候选质量过滤尝试（2026-05-17）：
+
+- 已为 `RuleSignalModel` 和阶段 6 CLI 增加 `min_score`、`min_breakout_strength`、`min_relative_strength_rank`、`min_volume_persistence_rank`、`min_amount_rank`、`max_atr_noise_rank`、`max_fake_prob`、`max_limit_dependency` 八个 T 日可见过滤参数。
+- 60 日 open 中性成本下，`amount_rank>=0.7, atr_noise<=0.8, limit_dependency<=0.8` 将成本后超额年化从 -75.20% 改善到 -28.70%，预测行数从 50,228 降到 23,755，日均换手约 3.13%。
+- 另两组过滤结果：硬趋势质量过滤恶化到 -86.01%；失真/涨停依赖过滤改善到 -39.15%，弱于流动性/噪声过滤。
+- 将流动性/噪声过滤扩到四组中性成本后：60 日 open/vwap 为 -28.70%/-27.77%，120 日 open 为 -113.10%。120 日 vwap 出现 +7838.56% 的异常超额年化，来自 2026-01-13 单日组合收益约 +103 倍，不采信，需要审计成交价、复权和持仓明细。
+- 已在阶段 6 摘要中增加最大/最小单日收益和 `has_suspicious_daily_return` 标记，后续报告会提示单日组合收益超过 20% 的异常结果。
+- 已通过 `python3 -m py_compile examples/a_share_breakout/mylib/model.py examples/a_share_breakout/mylib/stage6_config.py examples/a_share_breakout/mylib/stage6_metrics.py examples/a_share_breakout/mylib/stage6_report.py examples/a_share_breakout/backtest_rule_breakout.py` 和 `PYTHONPATH=. python3 -m pytest -q tests/test_a_share_breakout_rule_workflow.py tests/test_a_share_breakout_stage6_backtest.py`。
+
 ### 阶段 7：自定义事件策略
 
 目标：摆脱 TopK Dropout 的限制，实现报告里的事件进入、持有期、ATR 止损和趋势退出。
@@ -909,7 +918,7 @@ filter_out =
 阶段 0-6.1 已闭环，当前阶段 6 的成本后结果不支持直接进入复杂策略。建议按下面 5 个任务继续：
 
 1. 回到阶段 5，把稳定区分真/假突破的特征转成更严格的交易前过滤规则，重点降低高 ATR 噪声、单日量突刺和高失真候选。
-2. 在阶段 4/6 中增加最低分数、低失真、高流动性和板块集中度约束，再和默认 `hold_thresh=20` 组合复测。
-3. 对持仓和交易日志做归因，区分剩余亏损来自信号方向、候选质量、板块暴露还是执行价回退。
-4. 单独审计 `$open` 和 `$vwap` 缺失样本，避免 vwap 缺失时静默回退 close price 污染 open/vwap 对比。
+2. 审计 `filter_liq_noise_120_vwap` 在 2026-01-13 的异常单日收益，定位成交价、复权、持仓或 vwap 回退问题。
+3. 在 60 日窗口上继续组合 `amount_rank>=0.7, atr_noise<=0.8, limit_dependency<=0.8` 与最低分数、板块集中度和更低 `n_drop`。
+4. 对持仓和交易日志做归因，区分剩余亏损来自信号方向、候选质量、板块暴露还是执行价回退。
 5. 只有在低/中成本下留出期成本后超额不再整体为负、且换手回到可解释范围后，再进入阶段 7 自定义事件策略。

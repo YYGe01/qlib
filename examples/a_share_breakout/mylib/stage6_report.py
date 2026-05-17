@@ -76,8 +76,19 @@ def write_markdown_report(
     all_neutral_non_positive = (
         bool((neutral["excess_ann_return_with_cost"] <= 0).all()) if not neutral.empty else False
     )
+    has_suspicious = (
+        bool(neutral.get("has_suspicious_daily_return", pd.Series(False, index=neutral.index)).fillna(False).any())
+        if not neutral.empty
+        else False
+    )
     lines.extend(
         [
+            "",
+            (
+                "警告：至少一组中性成本 baseline 出现绝对值超过 20% 的单日组合收益，需要先审计成交价、复权和持仓明细，不能直接视为有效策略。"
+                if has_suspicious
+                else "单日组合收益未触发 20% 异常阈值。"
+            ),
             "",
             "## 成本敏感性",
             "",

@@ -16,6 +16,7 @@ from qlib.workflow.record_temp import PortAnaRecord
 
 from mylib.stage6_config import (
     CostScenario,
+    FILTER_KWARGS,
     baseline_id,
     build_port_analysis_config,
     infer_board,
@@ -24,6 +25,7 @@ from mylib.stage6_config import (
 
 
 TRADING_DAYS_PER_YEAR = 238
+SUSPICIOUS_DAILY_RETURN_ABS = 0.20
 
 
 def _risk_value(analysis_df: pd.DataFrame, section: str, metric: str) -> float:
@@ -131,6 +133,7 @@ def extract_portfolio_summary(
     active_window: int,
     hold_atr_buffer: float,
     hold_requires_ma: bool,
+    **filter_kwargs: float,
 ) -> Tuple[Dict[str, object], pd.DataFrame, pd.DataFrame]:
     net_return = report["return"] - report["cost"]
     excess_net = net_return - report["bench"]
@@ -164,6 +167,11 @@ def extract_portfolio_summary(
         "hold_requires_ma": bool(hold_requires_ma),
         "annualized_return_without_cost": float(gross_risk["annualized_return"]),
         "annualized_return_with_cost": float(net_risk["annualized_return"]),
+        "max_daily_return_without_cost": float(report["return"].max()),
+        "min_daily_return_without_cost": float(report["return"].min()),
+        "max_daily_return_with_cost": float(net_return.max()),
+        "min_daily_return_with_cost": float(net_return.min()),
+        "has_suspicious_daily_return": bool(report["return"].abs().max() > SUSPICIOUS_DAILY_RETURN_ABS),
         "information_ratio_with_cost": float(net_risk["information_ratio"]),
         "max_drawdown_with_cost": float(net_risk["max_drawdown"]),
         "excess_ann_return_without_cost": _risk_value(
@@ -187,6 +195,7 @@ def extract_portfolio_summary(
         "mean_current_holding_days": mean_holding_count,
         "final_account": float(report["account"].iloc[-1]),
     }
+    summary.update({key: filter_kwargs.get(key) for key in FILTER_KWARGS})
 
     yearly = pd.DataFrame(
         {
@@ -230,6 +239,7 @@ def run_portfolio_backtest(
     active_window: int,
     hold_atr_buffer: float,
     hold_requires_ma: bool,
+    **filter_kwargs: float,
 ) -> Tuple[Dict[str, object], pd.DataFrame, pd.DataFrame]:
     experiment_name = f"a_share_breakout_stage6_{int(breakout_window)}d_{deal_price}_{scenario.name}"
     port_config = build_port_analysis_config(
@@ -264,6 +274,7 @@ def run_portfolio_backtest(
         "impact_cost": scenario.impact_cost,
         "min_cost": scenario.min_cost,
     }
+    params.update({key: value for key, value in filter_kwargs.items() if value is not None})
     with R.start(experiment_name=experiment_name):
         recorder = R.get_recorder()
         R.log_params(**flatten_dict(params))
@@ -288,6 +299,7 @@ def run_portfolio_backtest(
         active_window=active_window,
         hold_atr_buffer=hold_atr_buffer,
         hold_requires_ma=hold_requires_ma,
+        **filter_kwargs,
     )
     summary.update({"topk": int(topk), "n_drop": int(n_drop), "hold_thresh": int(hold_thresh)})
     return summary, yearly, board
