@@ -11,6 +11,7 @@ sys.path.insert(0, str(EXAMPLE_DIR))
 
 from mylib.stage6_config import (  # noqa: E402
     CostScenario,
+    build_model_config,
     build_port_analysis_config,
     load_cost_scenarios,
 )
@@ -48,6 +49,16 @@ def test_port_analysis_config_uses_topk_dropout_and_impact_cost():
     assert config["strategy"]["kwargs"]["hold_thresh"] == 5
     assert config["backtest"]["exchange_kwargs"]["deal_price"] == "open"
     assert config["backtest"]["exchange_kwargs"]["impact_cost"] == 0.0005
+
+
+def test_model_config_defaults_to_entry_signal_with_20_day_hold():
+    config = build_model_config(60)
+
+    assert config["kwargs"]["breakout_window"] == 60
+    assert config["kwargs"]["signal_mode"] == "current"
+    assert config["kwargs"]["active_window"] == 20
+    assert config["kwargs"]["hold_atr_buffer"] == 1.2
+    assert config["kwargs"]["hold_requires_ma"] is True
 
 
 def test_extract_summary_and_cost_sensitivity_from_sample_report():
@@ -98,6 +109,10 @@ def test_extract_summary_and_cost_sensitivity_from_sample_report():
         scenario=scenario,
         backtest_start="2025-01-02",
         backtest_end="2026-04-17",
+        signal_mode="current",
+        active_window=20,
+        hold_atr_buffer=1.2,
+        hold_requires_ma=True,
     )
     sensitivity = build_cost_sensitivity(pd.DataFrame([summary | {"cost_scenario": "low"}, summary]))
 
@@ -128,6 +143,13 @@ def test_stage6_workflow_configs_cover_four_neutral_baselines():
         assert config["experiment_name"] == f"a_share_breakout_baseline_{window}d_{deal_price}_neutral"
         assert handler["breakout_window"] == window
         assert model["breakout_window"] == window
+        strategy = config["port_analysis_config"]["strategy"]["kwargs"]
+
+        assert model["signal_mode"] == "current"
+        assert model["active_window"] == 20
+        assert model["hold_atr_buffer"] == 1.2
+        assert model["hold_requires_ma"] is True
+        assert strategy["hold_thresh"] == 20
         assert exchange["deal_price"] == deal_price
         assert exchange["open_cost"] == 0.0005
         assert exchange["close_cost"] == 0.0015

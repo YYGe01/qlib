@@ -737,11 +737,20 @@ Qlib 回测配置：
 benchmark: SH000300
 topk: 8 或 10
 n_drop: 2 或 3
-hold_thresh: 1，或在换手控制诊断中提高到 5
+hold_thresh: 默认 20；历史诊断中过 1 和 5
 deal_price: open 或 vwap
 open_cost: 0.0003 / 0.0005 / 0.0008
 close_cost: 0.0010 / 0.0015 / 0.0020
 ```
+
+当前默认修正：
+
+```text
+signal_mode: current
+hold_thresh: 20
+```
+
+含义是：仍然只用 T 日新突破作为入场候选，但买入后至少持有 20 个交易日，避免 T+1 因 `candidate_Nd` 不再为真而被 TopK Dropout 机械卖出。`signal_mode=active` 可用于诊断“突破后 20 日内继续进入可买池”的效果，但不作为默认规则。
 
 ### 10.3 处理
 
@@ -822,6 +831,31 @@ python examples/a_share_breakout/backtest_rule_breakout.py
 | `baseline_120d_vwap` | -61.65% | 5.81% | 17.21 |
 
 诊断结论：降低 `n_drop` 并提高 `hold_thresh` 可以把换手降到更可解释范围，成本后超额年化相对原中性成本改善约 110 至 150 个百分点，但仍未转正；下一步重点应转向候选过滤和打分质量。
+
+阶段 6.2 候选持有修正：
+
+```text
+python examples/a_share_breakout/backtest_rule_breakout.py
+  --provider-uri ~/.qlib/qlib_data/cn_data
+  --output-dir examples/a_share_breakout/outputs
+  --breakout-window 60
+  --deal-price open
+  --cost-scenario neutral
+  --signal-mode current
+  --hold-thresh 20
+  --output-prefix current_hold20_
+```
+
+逐组合复测结果：
+
+| baseline | 成本后超额年化 | 日均换手 | 持有天数代理 |
+|---|---:|---:|---:|
+| `baseline_60d_open` | -75.20% | 3.40% | 29.38 |
+| `baseline_60d_vwap` | -71.11% | 3.51% | 28.53 |
+| `baseline_120d_open` | -107.72% | 5.04% | 19.84 |
+| `baseline_120d_vwap` | -104.13% | 5.00% | 20.01 |
+
+对照诊断：`signal_mode=active` 在 60 日 open 中性成本下将预测行数从 50,228 扩大到 225,388，日均换手升至 55.59%，成本后超额年化恶化至 -209.84%。结论是：T+1 无分数导致过早卖出确实是重要拖累，修正后约改善 76 至 103 个百分点；但负收益没有消失，根因还包括候选质量、打分方向和 TopK 买入旧/弱趋势样本的约束不足。
 
 ### 10.5 是否使用 Qlib
 

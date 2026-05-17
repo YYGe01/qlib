@@ -33,6 +33,7 @@ port_analysis_config: &port_analysis_config
             signal: <PRED>
             topk: 10
             n_drop: 3
+            hold_thresh: 20
             risk_degree: 0.95
             only_tradable: true
     backtest:
@@ -54,6 +55,10 @@ task:
         module_path: mylib.model
         kwargs:
             breakout_window: 60
+            signal_mode: current
+            active_window: 20
+            hold_atr_buffer: 1.2
+            hold_requires_ma: true
     dataset:
         class: DatasetH
         module_path: qlib.data.dataset

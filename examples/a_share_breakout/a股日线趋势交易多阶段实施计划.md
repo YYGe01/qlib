@@ -601,6 +601,14 @@ qlib 实现方式：
 - 结果显示强制换手是主要拖累之一：日均换手从原中性成本约 38.61%/42.30%/48.07%/52.52% 降到 3.80%/2.92%/5.71%/5.81%；持有天数代理提高到约 17.21 至 34.27 天。
 - 成本后超额年化显著改善但仍为负：60 日 open/vwap 为 -64.64%/-51.71%，120 日 open/vwap 为 -61.43%/-61.65%。因此阶段 7 继续暂停，下一步应先把阶段 5 的稳定区分特征转成更严格的候选过滤和打分约束。
 
+阶段 6.2 候选持有修正（2026-05-17）：
+
+- 已为 `RuleSignalModel` 增加 `signal_mode=current/active` 参数；默认阶段 6 使用 `current`，即只买 T 日新突破，避免 `active` 模式把突破后旧样本重新纳入买入池。
+- 已把阶段 6 CLI 和四组 baseline workflow 的 `hold_thresh` 默认改为 20，修复买入后次日因 `candidate_Nd=False` 而被 TopK Dropout 机械卖出的缺陷。
+- 逐组合中性成本复测显示，`current + hold_thresh=20` 将成本后超额年化改善为：60 日 open/vwap -75.20%/-71.11%，120 日 open/vwap -107.72%/-104.13%；日均换手降至约 3.40%/3.51%/5.04%/5.00%。
+- 对照诊断显示，60 日 open 使用 `signal_mode=active` 后预测行数从 50,228 扩至 225,388，日均换手升至 55.59%，成本后超额年化恶化至 -209.84%。结论是过早卖出是重要拖累但不是全部根因，简单扩大可买池不可取。
+- 已通过 `python3 -m py_compile examples/a_share_breakout/mylib/model.py examples/a_share_breakout/mylib/stage6_config.py examples/a_share_breakout/mylib/stage6_metrics.py examples/a_share_breakout/backtest_rule_breakout.py` 和 `PYTHONPATH=. python3 -m pytest -q tests/test_a_share_breakout_rule_workflow.py tests/test_a_share_breakout_stage6_backtest.py`。
+
 ### 阶段 7：自定义事件策略
 
 目标：摆脱 TopK Dropout 的限制，实现报告里的事件进入、持有期、ATR 止损和趋势退出。
@@ -901,7 +909,7 @@ filter_out =
 阶段 0-6.1 已闭环，当前阶段 6 的成本后结果不支持直接进入复杂策略。建议按下面 5 个任务继续：
 
 1. 回到阶段 5，把稳定区分真/假突破的特征转成更严格的交易前过滤规则，重点降低高 ATR 噪声、单日量突刺和高失真候选。
-2. 在阶段 4/6 中增加最低分数、低失真、高流动性和板块集中度约束，再和 `n_drop=1`、`hold_thresh=5` 组合复测。
+2. 在阶段 4/6 中增加最低分数、低失真、高流动性和板块集中度约束，再和默认 `hold_thresh=20` 组合复测。
 3. 对持仓和交易日志做归因，区分剩余亏损来自信号方向、候选质量、板块暴露还是执行价回退。
 4. 单独审计 `$open` 和 `$vwap` 缺失样本，避免 vwap 缺失时静默回退 close price 污染 open/vwap 对比。
 5. 只有在低/中成本下留出期成本后超额不再整体为负、且换手回到可解释范围后，再进入阶段 7 自定义事件策略。

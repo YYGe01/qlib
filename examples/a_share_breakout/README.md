@@ -232,6 +232,7 @@ python examples/a_share_breakout/event_study.py \
 ## 阶段 6：组合回测 MVP 与成本敏感性
 
 阶段 6 使用阶段 4 的无训练 `RuleSignalModel`，不重新定义打分逻辑。脚本会对每个突破窗口只生成一次 `pred.pkl`，再复用同一份预测跑 `open/vwap × 低/中/高成本` 回测矩阵。
+当前默认仍只用 `candidate_Nd=True` 的当日新突破作为入场信号，但 `TopkDropoutStrategy` 的 `hold_thresh` 固定为 20，避免买入次日因不再是新突破而被机械卖出。`RuleSignalModel` 另提供 `--signal-mode active` 作为诊断模式，可把突破后 20 日内仍满足趋势结构的样本继续纳入可选池；本地复测显示该模式会显著扩大买入池并恶化换手，暂不作为默认交易规则。
 
 在仓库根目录执行：
 
@@ -256,6 +257,19 @@ python examples/a_share_breakout/backtest_rule_breakout.py \
   --n-drop 1 \
   --hold-thresh 5 \
   --output-prefix turnover_hold5_
+```
+
+可选信号池诊断参数：
+
+```bash
+python examples/a_share_breakout/backtest_rule_breakout.py \
+  --provider-uri ~/.qlib/qlib_data/cn_data \
+  --output-dir examples/a_share_breakout/outputs \
+  --breakout-window 60 \
+  --deal-price open \
+  --cost-scenario neutral \
+  --signal-mode active \
+  --output-prefix active60_open_
 ```
 
 阶段 6 新增文件：
@@ -301,6 +315,17 @@ python examples/a_share_breakout/backtest_rule_breakout.py \
 | `baseline_120d_vwap` | -61.65% | 5.81% | 17.21 | +119.36 pct | -46.71 pct |
 
 结论：降低强制换手并增加最低持有阈值可以显著降低交易成本拖累，但四组成本后超额仍为负；下一步应优先把阶段 5 的稳定区分特征转成交易前过滤和打分约束，而不是直接进入阶段 7。
+
+阶段 6.2 候选持有修正（默认 `signal_mode=current`、`hold_thresh=20`）：
+
+| baseline | 成本后超额年化 | 日均换手 | 持有天数代理 | 相对原中性成本超额改善 |
+|---|---:|---:|---:|---:|
+| `baseline_60d_open` | -75.20% | 3.40% | 29.38 | +103.37 pct |
+| `baseline_60d_vwap` | -71.11% | 3.51% | 28.53 | +90.75 pct |
+| `baseline_120d_open` | -107.72% | 5.04% | 19.84 | +103.49 pct |
+| `baseline_120d_vwap` | -104.13% | 5.00% | 20.01 | +76.89 pct |
+
+对照诊断：60 日 open 使用 `--signal-mode active` 后，预测行数从 50,228 增至 225,388，日均换手升至 55.59%，成本后超额年化恶化至 -209.84%。因此问题不是“持有期内没有分数”这么单一；简单扩大可买池会引入大量旧突破候选。当前修正采用“只买当日新突破 + 最低持有 20 天”，能显著降低机械换手，但策略质量仍不足以支撑进入复杂事件策略。
 
 open/vwap 可成交性审计：
 

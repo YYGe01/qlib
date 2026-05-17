@@ -25,6 +25,10 @@ DEFAULT_SCORE_WEIGHTS: Dict[str, float] = {
     "limit_dependency": -1.0,
 }
 
+SIGNAL_MODE_CURRENT = "current"
+SIGNAL_MODE_ACTIVE = "active"
+VALID_SIGNAL_MODES = {SIGNAL_MODE_CURRENT, SIGNAL_MODE_ACTIVE}
+
 
 def _sigmoid(values: pd.Series) -> pd.Series:
     return 1.0 / (1.0 + np.exp(-values.clip(lower=-60.0, upper=60.0)))
@@ -45,12 +49,32 @@ def _cross_section_rank(values: pd.Series, default: float = 0.5) -> pd.Series:
     return ranked.fillna(default)
 
 
+def _bars_since_latest_true(values: pd.Series) -> pd.Series:
+    """Count bars since the latest true value within each instrument."""
+
+    def _distance(group: pd.Series) -> pd.Series:
+        if isinstance(group.index, pd.MultiIndex) and "datetime" in group.index.names:
+            group = group.sort_index(level="datetime")
+        else:
+            group = group.sort_index()
+        positions = np.arange(len(group), dtype=float)
+        latest = pd.Series(np.where(group.to_numpy(dtype=bool), positions, np.nan), index=group.index).ffill()
+        return pd.Series(positions, index=group.index) - latest
+
+    if isinstance(values.index, pd.MultiIndex) and "instrument" in values.index.names:
+        distance = values.groupby(level="instrument", group_keys=False).apply(_distance)
+    else:
+        distance = _distance(values)
+    return distance.reindex(values.index)
+
+
 class RuleSignalModel(Model):
     """Compute ``trend_score`` from rule features without parameter training.
 
-    ``fit`` performs only a schema check.  ``predict`` returns a sparse Series:
-    rows that are not current breakout candidates are dropped so TopK selection
-    cannot buy non-breakout names merely to fill the portfolio.
+    ``fit`` performs only a schema check.  ``predict`` returns a sparse Series.
+    In ``current`` mode only same-day breakout candidates are eligible; in
+    ``active`` mode recent breakout candidates keep a score during a bounded
+    holding window while the trend structure remains valid.
     """
 
     def __init__(
@@ -58,13 +82,25 @@ class RuleSignalModel(Model):
         breakout_window: int = 60,
         score_weights: Optional[Dict[str, float]] = None,
         require_candidate: bool = True,
+        signal_mode: str = SIGNAL_MODE_CURRENT,
+        active_window: int = 20,
+        hold_atr_buffer: float = 1.2,
+        hold_requires_ma: bool = True,
         score_name: str = "trend_score",
     ):
+        if signal_mode not in VALID_SIGNAL_MODES:
+            raise ValueError(f"signal_mode must be one of {sorted(VALID_SIGNAL_MODES)}, got {signal_mode!r}")
+        if int(active_window) <= 0:
+            raise ValueError("active_window must be positive")
         self.breakout_window = int(breakout_window)
         self.score_weights = dict(DEFAULT_SCORE_WEIGHTS)
         if score_weights:
             self.score_weights.update(score_weights)
         self.require_candidate = require_candidate
+        self.signal_mode = signal_mode
+        self.active_window = int(active_window)
+        self.hold_atr_buffer = float(hold_atr_buffer)
+        self.hold_requires_ma = bool(hold_requires_ma)
         self.score_name = score_name
         self.is_fitted = False
 
@@ -135,7 +171,16 @@ class RuleSignalModel(Model):
         )
         if self.require_candidate:
             candidate = _finite_series(frame[f"CANDIDATE_{suffix}"]) > 0.5
-            score = score.where(candidate)
+            if self.signal_mode == SIGNAL_MODE_CURRENT:
+                eligible = candidate
+            else:
+                bars_since_candidate = _bars_since_latest_true(candidate)
+                active_after_breakout = bars_since_candidate.ge(0) & bars_since_candidate.lt(self.active_window)
+                hold_ok = breakout_strength.ge(-self.hold_atr_buffer)
+                if self.hold_requires_ma:
+                    hold_ok &= _finite_series(frame["MA20_GT_MA60"]) > 0.5
+                eligible = active_after_breakout & (candidate | hold_ok)
+            score = score.where(eligible)
 
         score = score.replace([np.inf, -np.inf], np.nan).dropna()
         score.name = self.score_name

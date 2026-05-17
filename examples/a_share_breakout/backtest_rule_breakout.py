@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Sequence
 import pandas as pd
 
 from mylib.stage6_config import (
+    DEFAULT_ACTIVE_WINDOW,
     DEFAULT_BACKTEST_END,
     DEFAULT_BACKTEST_START,
     DEFAULT_BENCHMARK,
@@ -21,9 +22,13 @@ from mylib.stage6_config import (
     DEFAULT_DEAL_PRICES,
     DEFAULT_FIT_END,
     DEFAULT_FIT_START,
+    DEFAULT_HOLD_ATR_BUFFER,
+    DEFAULT_HOLD_REQUIRES_MA,
+    DEFAULT_HOLD_THRESH,
     DEFAULT_MARKET,
     DEFAULT_OUTPUT_DIR,
     DEFAULT_PROVIDER_URI,
+    DEFAULT_SIGNAL_MODE,
     DEFAULT_TEST_START,
     DEFAULT_VALID_END,
     DEFAULT_VALID_START,
@@ -63,7 +68,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--cost-scenario", nargs="+", default=list(DEFAULT_COST_SCENARIOS))
     parser.add_argument("--topk", type=int, default=10)
     parser.add_argument("--n-drop", type=int, default=3)
-    parser.add_argument("--hold-thresh", type=int, default=1)
+    parser.add_argument("--hold-thresh", type=int, default=DEFAULT_HOLD_THRESH)
+    parser.add_argument("--signal-mode", choices=["current", "active"], default=DEFAULT_SIGNAL_MODE)
+    parser.add_argument("--active-window", type=int, default=DEFAULT_ACTIVE_WINDOW)
+    parser.add_argument("--hold-atr-buffer", type=float, default=DEFAULT_HOLD_ATR_BUFFER)
+    parser.add_argument(
+        "--hold-requires-ma",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULT_HOLD_REQUIRES_MA,
+    )
     parser.add_argument("--risk-degree", type=float, default=0.95)
     parser.add_argument("--account", type=int, default=100000000)
     parser.add_argument("--output-prefix", default="")
@@ -100,6 +113,10 @@ def run_stage6(args: argparse.Namespace) -> Dict[str, pd.DataFrame]:
             valid_start=args.valid_start,
             valid_end=args.valid_end,
             test_start=args.test_start,
+            signal_mode=args.signal_mode,
+            active_window=args.active_window,
+            hold_atr_buffer=args.hold_atr_buffer,
+            hold_requires_ma=args.hold_requires_ma,
         )
         print(
             f"[stage6] {window}d prediction rows={len(pred)}, "
@@ -125,6 +142,10 @@ def run_stage6(args: argparse.Namespace) -> Dict[str, pd.DataFrame]:
                     hold_thresh=args.hold_thresh,
                     risk_degree=args.risk_degree,
                     account=args.account,
+                    signal_mode=args.signal_mode,
+                    active_window=args.active_window,
+                    hold_atr_buffer=args.hold_atr_buffer,
+                    hold_requires_ma=args.hold_requires_ma,
                 )
                 summaries.append(summary)
                 yearly_frames.append(yearly)

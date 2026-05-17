@@ -127,6 +127,10 @@ def extract_portfolio_summary(
     scenario: CostScenario,
     backtest_start: str,
     backtest_end: str,
+    signal_mode: str,
+    active_window: int,
+    hold_atr_buffer: float,
+    hold_requires_ma: bool,
 ) -> Tuple[Dict[str, object], pd.DataFrame, pd.DataFrame]:
     net_return = report["return"] - report["cost"]
     excess_net = net_return - report["bench"]
@@ -154,6 +158,10 @@ def extract_portfolio_summary(
         "pred_end": pred.index.get_level_values("datetime").max().strftime("%Y-%m-%d"),
         "backtest_start": backtest_start,
         "backtest_end": backtest_end,
+        "signal_mode": signal_mode,
+        "active_window": int(active_window),
+        "hold_atr_buffer": float(hold_atr_buffer),
+        "hold_requires_ma": bool(hold_requires_ma),
         "annualized_return_without_cost": float(gross_risk["annualized_return"]),
         "annualized_return_with_cost": float(net_risk["annualized_return"]),
         "information_ratio_with_cost": float(net_risk["information_ratio"]),
@@ -218,6 +226,10 @@ def run_portfolio_backtest(
     hold_thresh: int,
     risk_degree: float,
     account: int,
+    signal_mode: str,
+    active_window: int,
+    hold_atr_buffer: float,
+    hold_requires_ma: bool,
 ) -> Tuple[Dict[str, object], pd.DataFrame, pd.DataFrame]:
     experiment_name = f"a_share_breakout_stage6_{int(breakout_window)}d_{deal_price}_{scenario.name}"
     port_config = build_port_analysis_config(
@@ -241,6 +253,10 @@ def run_portfolio_backtest(
         "n_drop": n_drop,
         "hold_thresh": hold_thresh,
         "risk_degree": risk_degree,
+        "signal_mode": signal_mode,
+        "active_window": int(active_window),
+        "hold_atr_buffer": float(hold_atr_buffer),
+        "hold_requires_ma": bool(hold_requires_ma),
         "backtest_start": backtest_start,
         "backtest_end": backtest_end,
         "open_cost": scenario.open_cost,
@@ -268,6 +284,10 @@ def run_portfolio_backtest(
         scenario=scenario,
         backtest_start=backtest_start,
         backtest_end=backtest_end,
+        signal_mode=signal_mode,
+        active_window=active_window,
+        hold_atr_buffer=hold_atr_buffer,
+        hold_requires_ma=hold_requires_ma,
     )
     summary.update({"topk": int(topk), "n_drop": int(n_drop), "hold_thresh": int(hold_thresh)})
     return summary, yearly, board

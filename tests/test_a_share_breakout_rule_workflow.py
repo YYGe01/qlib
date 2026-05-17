@@ -58,7 +58,7 @@ def _feature_frame() -> pd.DataFrame:
 
 def test_rule_signal_model_scores_only_current_candidates():
     dataset = _Dataset(_feature_frame())
-    model = RuleSignalModel(breakout_window=60)
+    model = RuleSignalModel(breakout_window=60, signal_mode="current")
 
     assert model.fit(dataset) is model
     pred = model.predict(dataset)
@@ -70,6 +70,25 @@ def test_rule_signal_model_scores_only_current_candidates():
     assert pred.loc[(pd.Timestamp("2025-01-02"), "SH600000")] > pred.loc[
         (pd.Timestamp("2025-01-02"), "SZ000001")
     ]
+
+
+def test_rule_signal_model_keeps_recent_breakouts_active_for_holding():
+    frame = _feature_frame()
+    idx = pd.MultiIndex.from_product(
+        [pd.to_datetime(["2025-01-02", "2025-01-03", "2025-01-06", "2025-01-07"]), ["SH600000"]],
+        names=["datetime", "instrument"],
+    )
+    active_frame = frame.iloc[:1].reindex(idx).ffill()
+    active_frame["CANDIDATE_60D"] = [1, 0, 0, 0]
+    active_frame["BREAKOUT_STRENGTH_60D"] = [1.2, 0.2, -0.6, -0.4]
+    model = RuleSignalModel(breakout_window=60, signal_mode="active", active_window=3, hold_atr_buffer=1.2)
+
+    pred = model.predict(_Dataset(active_frame))
+
+    assert (pd.Timestamp("2025-01-02"), "SH600000") in pred.index
+    assert (pd.Timestamp("2025-01-03"), "SH600000") in pred.index
+    assert (pd.Timestamp("2025-01-06"), "SH600000") in pred.index
+    assert (pd.Timestamp("2025-01-07"), "SH600000") not in pred.index
 
 
 def test_rule_signal_model_reports_missing_feature_columns():
@@ -96,6 +115,8 @@ def test_workflow_config_uses_no_training_rule_model():
     workflow = (EXAMPLE_DIR / "workflow_rule_breakout.yaml").read_text(encoding="utf-8")
 
     assert "class: RuleSignalModel" in workflow
+    assert "signal_mode: current" in workflow
+    assert "hold_thresh: 20" in workflow
     assert "class: AShareBreakoutRuleHandler" in workflow
     assert "class: SignalRecord" in workflow
     assert "class: PortAnaRecord" in workflow

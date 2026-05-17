@@ -37,6 +37,11 @@ DEFAULT_VALID_END = "2024-12-31"
 DEFAULT_TEST_START = "2025-01-01"
 DEFAULT_BACKTEST_START = "2025-01-02"
 DEFAULT_BACKTEST_END = "2026-04-17"
+DEFAULT_SIGNAL_MODE = "current"
+DEFAULT_ACTIVE_WINDOW = 20
+DEFAULT_HOLD_ATR_BUFFER = 1.2
+DEFAULT_HOLD_REQUIRES_MA = True
+DEFAULT_HOLD_THRESH = 20
 
 
 @dataclass(frozen=True)
@@ -158,11 +163,24 @@ def build_dataset_config(
     }
 
 
-def build_model_config(breakout_window: int) -> Dict[str, object]:
+def build_model_config(
+    breakout_window: int,
+    *,
+    signal_mode: str = DEFAULT_SIGNAL_MODE,
+    active_window: int = DEFAULT_ACTIVE_WINDOW,
+    hold_atr_buffer: float = DEFAULT_HOLD_ATR_BUFFER,
+    hold_requires_ma: bool = DEFAULT_HOLD_REQUIRES_MA,
+) -> Dict[str, object]:
     return {
         "class": "RuleSignalModel",
         "module_path": "mylib.model",
-        "kwargs": {"breakout_window": int(breakout_window)},
+        "kwargs": {
+            "breakout_window": int(breakout_window),
+            "signal_mode": signal_mode,
+            "active_window": int(active_window),
+            "hold_atr_buffer": float(hold_atr_buffer),
+            "hold_requires_ma": bool(hold_requires_ma),
+        },
     }
 
 
@@ -176,7 +194,7 @@ def build_port_analysis_config(
     benchmark: str,
     topk: int = 10,
     n_drop: int = 3,
-    hold_thresh: int = 1,
+    hold_thresh: int = DEFAULT_HOLD_THRESH,
     risk_degree: float = 0.95,
     account: int = 100000000,
 ) -> Dict[str, object]:
@@ -224,6 +242,10 @@ def generate_prediction(
     valid_start: str,
     valid_end: str,
     test_start: str,
+    signal_mode: str = DEFAULT_SIGNAL_MODE,
+    active_window: int = DEFAULT_ACTIVE_WINDOW,
+    hold_atr_buffer: float = DEFAULT_HOLD_ATR_BUFFER,
+    hold_requires_ma: bool = DEFAULT_HOLD_REQUIRES_MA,
 ) -> pd.DataFrame:
     dataset = init_instance_by_config(
         build_dataset_config(
@@ -239,7 +261,15 @@ def generate_prediction(
             test_start=test_start,
         )
     )
-    model = init_instance_by_config(build_model_config(breakout_window))
+    model = init_instance_by_config(
+        build_model_config(
+            breakout_window,
+            signal_mode=signal_mode,
+            active_window=active_window,
+            hold_atr_buffer=hold_atr_buffer,
+            hold_requires_ma=hold_requires_ma,
+        )
+    )
     model.fit(dataset)
     pred = model.predict(dataset, segment="test")
     if isinstance(pred, pd.Series):
