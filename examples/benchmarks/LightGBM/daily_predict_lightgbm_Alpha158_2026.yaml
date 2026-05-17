@@ -1,28 +1,28 @@
 qlib_init:
-    # Use the same cn_data directory as training. Daily prediction can still
-    # restrict instruments below, so cn_data does not have to update every
-    # market instrument before inference.
+    # 默认直接使用训练同一份 cn_data。
+    # 每日预测仍可在 prediction.instruments 中限制标的池，
+    # 因此推理前不强制要求全市场所有标的都完成当日更新。
     provider_uri: "~/.qlib/qlib_data/cn_data"
     region: cn
 
 experiment:
-    # Local MLflow/Qlib recorder location. Relative paths are resolved from the
-    # directory where scripts/daily_predict.py is executed.
+    # 本地 MLflow/Qlib recorder 位置；相对路径按运行 daily_predict.py 时的当前目录解析。
     uri: "mlruns"
     name: "lightgbm_Alpha158_2026"
     recorder_id: "656273f29b6e46f191d4de56866e52f6"
 
 data_update:
-    # Optional hook for your own cn_data incremental update command.
-    # This pool controls what your update command should update. It can differ
-    # from prediction.instruments below.
-    # Keep disabled when data has already been updated before this script runs.
+    # 可选：在预测前调用你自己的 cn_data 增量更新命令。
+    # 这里的 instruments 只控制更新命令要更新什么标的池，
+    # 可以和下面 prediction.instruments 的预测标的池不同。
+    # 如果你已经在外部更新好数据，保持 enabled: false 即可。
     enabled: false
     cwd: "."
     instruments: all
+    # 更新标的也可以来自文件，例如一行一个股票代码。
     # instruments_file: "configs/update_universe.txt"
     command: []
-    # Example:
+    # 示例：启用后会把占位符替换成当前配置值再执行。
     # command:
     #     - "python"
     #     - "scripts/your_update_cn_data.py"
@@ -34,9 +34,11 @@ data_update:
 prediction:
     date: latest
     freq: day
-    # Default: predict all instruments available from cn_data.
-    # Use instruments_file or an explicit list when you only want selected scores.
+    # 默认预测 cn_data 中可用的全标的。
+    # 如果只想看部分标的，把 instruments 改成 csi300、自选列表，
+    # 或启用 instruments_file。
     instruments: all
+    # 预测标的也可以来自文件，例如一行一个股票代码。
     # instruments_file: "configs/predict_universe.txt"
     # instruments:
     #     - SH600000
