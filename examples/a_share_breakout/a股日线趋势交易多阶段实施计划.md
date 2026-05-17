@@ -1,6 +1,6 @@
 # A股日线趋势交易多阶段实施计划
 
-> 本文基于 `docs/a股趋势交易研究报告.md` 拆解为可执行工程计划。目标是先做**不基于模型训练**的日线趋势/突破研究，用规则、事件标注和回测验证“真突破/假突破”的可交易性。本文不是投资建议，也不是最终策略承诺；所有结论必须以样本外回测、交易成本、滑点、容量和实盘小资金验证为准。
+> 本文基于 `a股趋势交易研究报告.md` 拆解为可执行工程计划。目标是先做**不基于模型训练**的日线趋势/突破研究，用规则、事件标注和回测验证“真突破/假突破”的可交易性。本文不是投资建议，也不是最终策略承诺；所有结论必须以样本外回测、交易成本、滑点、容量和实盘小资金验证为准。
 
 ## 1. 总体结论
 
@@ -18,6 +18,8 @@
 ```text
 examples/a_share_breakout/
   README.md
+  a股趋势交易研究报告.md
+  a股日线趋势交易多阶段实施计划.md
   workflow_rule_breakout.yaml
   event_study.py
   backtest_rule_breakout.py
@@ -32,10 +34,6 @@ examples/a_share_breakout/
     cost_scenarios.yaml
   outputs/
     .gitignore
-
-docs/
-  a股趋势交易研究报告.md
-  a股日线趋势交易多阶段实施计划.md
 ```
 
 第一阶段先把实验放在 `examples/a_share_breakout/`，尽量不改 qlib 核心包。等研究闭环稳定后，再考虑抽成单独项目，只依赖 `pyqlib`。
@@ -208,6 +206,14 @@ docs/
 - 输出 `universe_by_board.csv`，包含主板、创业板、科创板、北交所样本分布。
 - 文档记录未能严格实现的过滤项。
 
+实施记录（2026-05-17）：
+
+- 已创建 `examples/a_share_breakout/` 阶段 1 实验目录。
+- 已实现 `examples/a_share_breakout/data_inventory.py`，默认读取本地 `~/.qlib/qlib_data/cn_data`。
+- 已生成 `examples/a_share_breakout/outputs/data_inventory.csv`、`sample_filter_summary.csv`、`universe_by_board.csv`。
+- 本地运行窗口为 2021-01-04 至 2026-04-17，活跃标的 5952 个，其中代码前缀识别的 A 股股票类标的 5946 个。
+- README 已记录阶段 1 的代理口径和缺口：ST/退市状态、高低涨跌停价、严格连续一字板打开日、除权除息异常、分钟尾盘、Level-2、资金流和行业字段仍待后续数据补充。
+
 ### 阶段 2：突破事件识别与真/假突破标注
 
 目标：把报告中的“真突破/假突破”定义变成可复现事件表。
@@ -293,6 +299,18 @@ otherwise = ambiguous
 - 生成 `breakout_events_120d.parquet/csv`。
 - 随机抽样 20 个事件人工核对 K 线。
 - 检查事件日后 20 日不足的样本不参与标签统计。
+
+实施记录（2026-05-17）：
+
+- 已实现 `examples/a_share_breakout/breakout_events.py`，默认一次生成 60 日和 120 日突破事件。
+- 已生成 `examples/a_share_breakout/outputs/breakout_events_60d.csv`、`breakout_events_60d.parquet`、`breakout_events_120d.csv`、`breakout_events_120d.parquet`。
+- 已生成 `breakout_event_summary.csv`，记录候选事件、未来 20 日不足剔除数、标签分布和板块-标签分布。
+- 已生成 `breakout_events_60d_manual_check_ohlcv.csv` 和 `breakout_events_120d_manual_check_ohlcv.csv`，每个窗口随机抽样 20 个事件并输出 `T-5` 至 `T+20` 的 OHLCV 核对行。
+- 本地 2021-01-04 至 2026-04-17 窗口内，60 日突破候选 144033 个，未来 20 日不足剔除 3512 个，输出可标注事件 140521 个；其中真突破 35491、假突破 92889、不确定 12141。
+- 同一窗口内，120 日突破候选 89571 个，未来 20 日不足剔除 2542 个，输出可标注事件 87029 个；其中真突破 21557、假突破 59730、不确定 5742。
+- 已通过 `python -m py_compile examples/a_share_breakout/data_inventory.py examples/a_share_breakout/breakout_events.py`、`pytest -q tests/test_a_share_breakout_breakout_events.py tests/test_a_share_breakout_data_inventory.py` 和 CSV/Parquet 行数一致性审计。
+- 换手率分位仍未严格实现；阶段 2 使用成交额 252 日历史分位作为代理，若成交额不可用则回落到成交量分位并在 `amount_rank_source` 中标记。
+- 标签使用未来 5/20 日数据，仅用于事件研究统计；突破候选、量能确认和成交额分位只使用 T 日及以前可见数据。
 
 ### 阶段 3：规则指标库与失真评分
 

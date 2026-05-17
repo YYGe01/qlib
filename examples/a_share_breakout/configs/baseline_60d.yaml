@@ -1,0 +1,28 @@
+# 60 日突破研究的阶段 1/2 基线参数。
+data:
+  provider_uri: "~/.qlib/qlib_data/cn_data"
+  market: "all"
+  start_time: "2021-01-01"
+  end_time: null
+  frequency: "day"
+
+sample_filter:
+  first_trading_days: 5
+  min_history_days: 250
+  board_proxy: "代码前缀代理"
+  pause_proxy: "close/volume 缺失或成交量为 0"
+
+breakout:
+  breakout_window: 60
+  atr_window: 14
+  volume_window: 20
+  turnover_rank_window: 252
+  retest_window: 5
+  holding_window: 20
+  true_breakout_return: 0.08
+  weak_follow_return: 0.03
+  false_breakout_drawdown: -0.06
+
+execution:
+  signal_time: "T 日收盘"
+  deal_prices: ["open", "vwap"]
