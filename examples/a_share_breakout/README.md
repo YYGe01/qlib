@@ -1,6 +1,6 @@
 # A 股日线突破研究
 
-本目录承接 `a股日线趋势交易多阶段实施计划.md` 的日线规则研究，目前已完成阶段 1 数据盘点与阶段 2 突破事件标注脚本。
+本目录承接 `a股日线趋势交易多阶段实施计划.md` 的日线规则研究，目前已完成阶段 1 数据盘点、阶段 2 突破事件标注、阶段 3 日线规则特征和阶段 4 无训练 qrun 接入。
 
 ## 阶段 1：数据盘点与样本过滤
 
@@ -146,4 +146,43 @@ python examples/a_share_breakout/daily_features.py \
 ## 阶段 0 脚手架
 
 `configs/baseline_60d.yaml` 和 `configs/baseline_120d.yaml` 固定第一版 60 日/120 日突破参数。
-它们是后续事件生成和 qrun 接入的参数清单，目前还不是 qrun workflow 文件。
+它们是阶段 1-3 脚本使用的参数清单；阶段 4 qrun 使用 `workflow_rule_breakout.yaml`。
+
+## 阶段 4：无训练规则信号与 qrun 流水线
+
+在仓库根目录执行：
+
+```bash
+python -m qlib.cli.run examples/a_share_breakout/workflow_rule_breakout.yaml
+```
+
+阶段 4 新增文件：
+
+| 文件 | 用途 |
+|---|---|
+| `workflow_rule_breakout.yaml` | 60 日突破规则信号的 qrun workflow，包含 `SignalRecord`、`SigAnaRecord` 和 `PortAnaRecord`。 |
+| `mylib/handler.py` | `AShareBreakoutRuleHandler`，用 Qlib 表达式生成 T 日可见的规则特征。 |
+| `mylib/model.py` | `RuleSignalModel`，`fit` 只校验列，`predict` 计算 `trend_score`，不训练模型。 |
+
+最近一次本地运行：
+
+| 项目 | 值 |
+|---|---|
+| 命令 | `python -m qlib.cli.run examples/a_share_breakout/workflow_rule_breakout.yaml` |
+| 运行日期 | 2026-05-17 |
+| qrun recorder | `mlruns/476777289722113917/80ae45a5cf0b400f8e05bdfccd337e7b` |
+| 预测窗口 | 2025-01-02 至 2026-04-17 |
+| `pred.pkl` 行数 | 50228 |
+| `pred.pkl` 覆盖标的 | 5632 |
+| 记录产物 | `pred.pkl`、`label.pkl`、`sig_analysis/*.pkl`、`portfolio_analysis/*.pkl` |
+
+阶段 4 workflow 不使用 `RobustZScoreNorm`、`Fillna` 或 label processor。原因是 `RuleSignalModel` 内部会处理 NaN/inf，且不训练参数；对全市场日线面板额外复制处理会显著增加内存占用。
+
+阶段 4 验证记录：
+
+| 命令 | 结果 |
+|---|---|
+| `python -m py_compile examples/a_share_breakout/mylib/handler.py examples/a_share_breakout/mylib/model.py` | 通过 |
+| `pytest -q tests/test_a_share_breakout_rule_workflow.py` | 通过：4 个测试 |
+| Qlib 小样本表达式取数 | 通过：`SH600000` 可生成突破位、ATR、突破强度和候选标记 |
+| `python -m qlib.cli.run examples/a_share_breakout/workflow_rule_breakout.yaml` | 通过：`SignalRecord`、`SigAnaRecord`、`PortAnaRecord` 均保存产物；运行中出现 `$open` 含 NaN 的数据质量警告 |

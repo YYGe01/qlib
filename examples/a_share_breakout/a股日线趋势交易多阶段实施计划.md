@@ -466,6 +466,18 @@ qlib 实现方式：
 - `SignalRecord` 和 `PortAnaRecord` 正常完成。
 - 不调用任何训练模型。
 
+实施记录（2026-05-17）：
+
+- 已新增 `examples/a_share_breakout/mylib/handler.py`，实现 `AShareBreakoutRuleHandler`，用 Qlib 表达式生成 60 日突破位、ATR、突破强度、均线结构、相对强弱、量能持续性、成交额分位、布林带宽、涨停依赖代理和 T 日可见的日线失真原始分。
+- 已新增 `examples/a_share_breakout/mylib/model.py`，实现 `RuleSignalModel`；`fit(dataset)` 只校验阶段 4 必需特征列，`predict(dataset)` 计算 `trend_score` 并只输出当前突破候选，不训练 LightGBM/XGBoost/深度学习等任何模型。
+- 已新增 `examples/a_share_breakout/workflow_rule_breakout.yaml`，接入标准 qrun `SignalRecord`、`SigAnaRecord`、`PortAnaRecord`；当前配置为 60 日突破、`market=all`、T+1 `open` 成交、中性成本口径。
+- 本地运行 `python -m qlib.cli.run examples/a_share_breakout/workflow_rule_breakout.yaml` 已完成，recorder 为 `mlruns/476777289722113917/80ae45a5cf0b400f8e05bdfccd337e7b`。
+- 本次 qrun 生成 `pred.pkl`，预测窗口为 2025-01-02 至 2026-04-17，输出 50228 行规则分数，覆盖 5632 个标的；同时生成 `label.pkl`、`sig_analysis/*.pkl` 和 `portfolio_analysis/*.pkl`。
+- `SigAnaRecord` 本次输出 IC 0.01918、Rank IC -0.00328；`PortAnaRecord` 正常完成并保存组合分析产物。该结果仅证明阶段 4 流水线闭环，不构成策略有效性结论。
+- workflow 不使用 `RobustZScoreNorm`、`Fillna` 或 label processor；`RuleSignalModel` 内部处理 NaN/inf，避免全市场面板预处理导致额外内存复制。
+- 已通过 `python -m py_compile examples/a_share_breakout/mylib/handler.py examples/a_share_breakout/mylib/model.py`、`pytest -q tests/test_a_share_breakout_rule_workflow.py`、Qlib 小样本表达式取数和全量阶段 4 qrun。
+- qrun 期间出现 `$open` 字段含 NaN 的数据质量警告，未阻断回测；阶段 6 成本/成交价敏感性回测需要继续审计 open/vwap 可成交性。
+
 ### 阶段 5：事件研究统计与可视化报告
 
 目标：先分析事件规律，再看净值曲线，降低过拟合风险。
