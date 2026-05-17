@@ -41,7 +41,7 @@ a_share_breakout = 针对 A 股日线突破问题写的一套研究数据流和�
 
 ## 2. 当前到底是在验证什么
 
-当前已落地的是阶段 1 到阶段 3：
+当前已落地的是阶段 0 到阶段 5：
 
 | 阶段 | 当前状态 | 性质 |
 |---|---|---|
@@ -50,7 +50,8 @@ a_share_breakout = 针对 A 股日线突破问题写的一套研究数据流和�
 | 阶段 2 | 已有 `breakout_events.py` 和事件表 | 验证突破事件定义，给事件贴真/假突破研究标签。 |
 | 阶段 3 | 已有 `daily_features.py` 和特征矩阵输出 | 验证规则特征和日线失真评分能否生成。 |
 | 阶段 4 | 已接入 qrun | `RuleSignalModel` 不训练参数，把 T 日可见规则特征转成 Qlib prediction。 |
-| 阶段 5/6 | 尚未生成正式事件报告和组合回测 | 后续用事件统计和 Qlib 回测判断是否值得继续。 |
+| 阶段 5 | 已生成正式事件研究报告 | 用事件统计、分层诊断和 HAC 收益统计判断阶段 6 回测重点。 |
+| 阶段 6 | 尚未生成完整组合回测矩阵 | 后续做 60/120 日、open/vwap 和成本情景敏感性。 |
 
 因此，目前确实主要是在做研究验证：
 
@@ -64,7 +65,7 @@ a_share_breakout = 针对 A 股日线突破问题写的一套研究数据流和�
 
 1. 没有训练任何机器学习模型。
 2. 阶段 4 已能生成 `pred.pkl` 并跑通 `PortAnaRecord`，但还没有形成阶段 6 要求的 60/120 日、open/vwap、成本情景完整回测矩阵。
-3. 还没有组合净值、换手率、最大回撤等正式策略报告。
+3. 阶段 5 已生成事件研究报告，但还没有组合净值、换手率、最大回撤等正式策略报告。
 
 ## 3. 总体数据流
 
@@ -551,7 +552,7 @@ candidate_120d,count,89571
 
 ## 8. 阶段 4：无训练信号接入 Qlib
 
-阶段 4 是下一步要做的 Qlib 接入层，目前还没有正式完成。
+阶段 4 已完成第一版 Qlib 接入。`RuleSignalModel` 不训练参数，只把 T 日可见规则特征转成 Qlib prediction，并已通过标准 qrun 的 `SignalRecord`、`SigAnaRecord` 和 `PortAnaRecord`。
 
 ### 8.1 目的
 
@@ -596,7 +597,7 @@ trend_score =
   - 1.0 * limit_dependency_score
 ```
 
-计划新增文件：
+新增文件：
 
 ```text
 examples/a_share_breakout/mylib/handler.py
@@ -614,7 +615,7 @@ Qlib 角色：
 
 ### 8.4 输出
 
-计划输出 Qlib prediction：
+已输出 Qlib prediction：
 
 ```text
 pred.pkl
@@ -629,7 +630,7 @@ datetime    instrument  score
 2021-10-26  SH600038    1.27
 ```
 
-这里的 `2.31` 是格式示例，不是当前已生成结果。
+最近一次全量 qrun 预测窗口为 2025-01-02 至 2026-04-17，生成 `pred.pkl` 50228 行，覆盖 5632 个标的；recorder 为 `mlruns/476777289722113917/80ae45a5cf0b400f8e05bdfccd337e7b`。
 
 ### 8.5 是否使用 Qlib
 
@@ -678,21 +679,30 @@ KS p 值
 
 ### 9.4 输出
 
-计划输出：
+已输出：
 
 ```text
 outputs/event_study_report.md
-outputs/figures/event_return_curve_60d.png
-outputs/figures/feature_auc_by_year.csv
-outputs/figures/board_label_distribution.csv
+outputs/event_label_summary.csv
+outputs/event_feature_diagnostics.csv
+outputs/event_segment_summary.csv
+outputs/event_forward_return_curve.csv
+outputs/event_forward_return_hac.csv
+outputs/figures/event_forward_returns_60d.png
+outputs/figures/event_forward_returns_120d.png
+outputs/figures/trend_strength_fake_prob_heatmap_60d.png
+outputs/figures/trend_strength_fake_prob_heatmap_120d.png
+outputs/figures/true_rate_by_fake_prob_60d.png
+outputs/figures/true_rate_by_fake_prob_120d.png
 ```
 
-报告表格样例：
+最近一次本地运行覆盖 2021-01-04 至 2026-03-19，合计 227550 个事件，其中 60 日事件 140521 个、120 日事件 87029 个。
+
+报告表格字段：
 
 ```csv
-feature,true_mean,false_mean,median_diff,ks_pvalue,single_feature_auc,comment
-vol_ratio_3d,2.10,1.35,0.42,0.0001,0.61,真突破更依赖持续放量
-limit_dependency_score,0.18,0.34,-0.10,0.0020,0.57,高涨停依赖可能增加失真
+breakout_window,feature,feature_cn,true_mean,false_mean,median_diff_true_minus_false,ks_p_value,true_higher_auc,directional_auc,ks_q_value
+60,vol_ratio_3d,3日量能持续性,2.2736,2.4781,-0.0652,0.0,0.4812,0.5188,0.0
 ```
 
 ### 9.5 是否使用 Qlib

@@ -528,6 +528,16 @@ qlib 实现方式：
 - 能回答“哪些特征稳定区分真/假突破”。
 - 能回答“结论是否只来自某一年或某个板块”。
 
+实施记录（2026-05-17）：
+
+- 已实现 `examples/a_share_breakout/event_study.py`，读取阶段 2 的 60/120 日事件表、阶段 3 的日线特征矩阵和本地 Qlib close/benchmark 数据，生成阶段 5 事件研究产物。
+- 已生成 `examples/a_share_breakout/outputs/event_study_report.md`、`event_label_summary.csv`、`event_feature_diagnostics.csv`、`event_segment_summary.csv`、`event_forward_return_curve.csv` 和 `event_forward_return_hac.csv`。
+- 已生成 `examples/a_share_breakout/outputs/figures/` 下 6 张图：60/120 日事件后平均累计收益曲线、趋势强度 × 失真概率热力图、失真概率分组真突破率图。
+- 本地阶段 5 运行覆盖事件窗口 2021-01-04 至 2026-03-19，合计 227550 个事件，其中 60 日事件 140521 个、120 日事件 87029 个。
+- 事件研究报告输出标签分布、板块/年份/市场环境/流动性/波动/失真概率分层，单变量 KS 检验、Benjamini-Hochberg FDR q 值、单变量 AUC，以及按事件日期聚合后的 20 日收益 Newey-West HAC 标准误。
+- 当前结果显示，T+1 开盘收益（研究用，不能进交易信号）和 ATR% 在 60/120 日窗口中具备相对稳定的单变量区分度；年份和板块分层差异仍存在，阶段 6 回测不能只依赖整体均值判断。
+- 已通过 `python -m py_compile examples/a_share_breakout/event_study.py`、`pytest -q tests/test_a_share_breakout_event_study.py` 和全量阶段 5 生成命令。
+
 ### 阶段 6：组合回测 MVP
 
 目标：用最简单的可交易规则验证是否值得继续做复杂策略。
@@ -829,24 +839,25 @@ filter_out =
 | 行业相对强弱 | 待补 | 需要行业分类和行业指数 |
 | ADX 标准实现 | 第二轮 | 可用 pandas/talib 自算或自定义算子 |
 | White Reality Check / SPA | 后期 | MVP 后再做 |
-| Newey-West HAC | 后期 | 事件研究报告阶段做 |
+| Newey-West HAC | 已完成阶段 5 第一版 | 当前用于事件后 20 日收益均值；后续若做回归再扩展 |
 
 ## 7. 推荐执行顺序
 
 优先级从高到低：
 
-1. 建立 `examples/a_share_breakout/` 实验目录。
-2. 做本地数据盘点和字段缺口报告。
-3. 实现 60/120 日突破事件识别。
-4. 生成真/假/不确定标签。
-5. 实现 MVP 规则分数。
-6. 用 qlib 跑无训练 TopK 回测。
-7. 输出事件研究统计报告。
-8. 做 open/vwap、低/中/高成本敏感性。
-9. 实现自定义事件策略。
-10. 补分钟、行业、资金流、Level-2 数据。
-11. 做 walk-forward 和统计检验。
-12. 决定是否独立成项目或进入模拟观察。
+1. 已完成：建立 `examples/a_share_breakout/` 实验目录。
+2. 已完成：做本地数据盘点和字段缺口报告。
+3. 已完成：实现 60/120 日突破事件识别。
+4. 已完成：生成真/假/不确定标签。
+5. 已完成：实现 MVP 规则分数。
+6. 已完成：用 qlib 跑无训练 TopK 基础流水线。
+7. 已完成：输出事件研究统计报告。
+8. 下一步：做 open/vwap、低/中/高成本敏感性。
+9. 下一步：形成 `baseline_60d_open`、`baseline_60d_vwap`、`baseline_120d_open`、`baseline_120d_vwap` 四组结果。
+10. 后续：实现自定义事件策略。
+11. 后续：补分钟、行业、资金流、Level-2 数据。
+12. 后续：做 walk-forward 和更完整的统计检验。
+13. 后续：决定是否独立成项目或进入模拟观察。
 
 ## 8. 风险清单
 
@@ -865,12 +876,10 @@ filter_out =
 
 ## 9. 下一步最小任务
 
-下一步不需要先补所有数据。建议按下面 5 个任务开始：
+阶段 0-5 已闭环，下一步不需要先补所有数据。建议按下面 5 个任务继续：
 
-1. 创建 `examples/a_share_breakout/`。
-2. 写 `data_inventory.py`，输出本地字段、日期范围、股票池统计。
-3. 写 `event_study.py`，生成 60/120 日突破事件表。
-4. 写 `mylib/handler.py` 和 `mylib/model.py`，生成无训练规则分数。
-5. 写 `workflow_rule_breakout.yaml`，跑第一版 qlib 回测。
-
-完成这 5 步后，再根据事件统计结果决定是否值得进入自定义策略和分钟数据阶段。
+1. 拆分阶段 6 的四组 baseline 配置：60/120 日 × open/vwap。
+2. 增加低/中/高成本情景配置，明确 `open_cost`、`close_cost`、滑点或 impact 代理口径。
+3. 运行四组 qrun 并落盘组合分析产物，记录 recorder、年化收益、最大回撤、信息比率、换手率和成本前后差异。
+4. 审计 `$open` 和 `$vwap` 可成交性，处理阶段 4 已观察到的 `$open` NaN 数据质量警告。
+5. 若成本后收益明显消失，暂停自定义事件策略，回到阶段 5 特征与过滤规则修正。

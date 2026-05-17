@@ -1,6 +1,6 @@
 # A 股日线突破研究
 
-本目录承接 `a股日线趋势交易多阶段实施计划.md` 的日线规则研究，目前已完成阶段 1 数据盘点、阶段 2 突破事件标注、阶段 3 日线规则特征和阶段 4 无训练 qrun 接入。
+本目录承接 `a股日线趋势交易多阶段实施计划.md` 的日线规则研究，目前已完成阶段 1 数据盘点、阶段 2 突破事件标注、阶段 3 日线规则特征、阶段 4 无训练 qrun 接入和阶段 5 事件研究报告。
 
 ## 阶段 1：数据盘点与样本过滤
 
@@ -186,3 +186,45 @@ python -m qlib.cli.run examples/a_share_breakout/workflow_rule_breakout.yaml
 | `pytest -q tests/test_a_share_breakout_rule_workflow.py` | 通过：4 个测试 |
 | Qlib 小样本表达式取数 | 通过：`SH600000` 可生成突破位、ATR、突破强度和候选标记 |
 | `python -m qlib.cli.run examples/a_share_breakout/workflow_rule_breakout.yaml` | 通过：`SignalRecord`、`SigAnaRecord`、`PortAnaRecord` 均保存产物；运行中出现 `$open` 含 NaN 的数据质量警告 |
+
+## 阶段 5：事件研究统计与可视化报告
+
+在仓库根目录执行：
+
+```bash
+python examples/a_share_breakout/event_study.py \
+  --provider-uri ~/.qlib/qlib_data/cn_data \
+  --output-dir examples/a_share_breakout/outputs \
+  --breakout-windows 60 120
+```
+
+阶段 5 读取阶段 2 事件表、阶段 3 特征矩阵和本地 Qlib close/benchmark 数据，生成事件研究报告和图表。阶段 3 的 `feature_matrix_daily.csv` 较大，脚本会按 chunk 读取事件日需要的列。
+
+| 输出文件 | 用途 |
+|---|---|
+| `event_study_report.md` | 阶段 5 Markdown 报告，汇总标签分布、特征诊断、分层稳定性、20 日收益 HAC 统计和图表索引。 |
+| `event_label_summary.csv` | 60/120 日突破的真突破、假突破、不确定标签数量和占比。 |
+| `event_feature_diagnostics.csv` | 真/假突破单变量差异、KS 检验、Benjamini-Hochberg FDR q 值和单变量 AUC。 |
+| `event_segment_summary.csv` | 板块、年份、指数 MA60、市场成交额、流动性、波动、布林带宽和失真概率分层。 |
+| `event_forward_return_curve.csv` | 事件后 0-20 个交易日按标签聚合的平均累计收益曲线数据。 |
+| `event_forward_return_hac.csv` | 20 日收益按事件日期聚合后的 Newey-West HAC 标准误、t 值和样本数。 |
+| `figures/*.png` | 事件后收益曲线、趋势强度 × 失真概率热力图、失真概率分组真突破率图。 |
+
+最近一次本地运行：
+
+| 项目 | 值 |
+|---|---|
+| 命令 | `python examples/a_share_breakout/event_study.py --provider-uri ~/.qlib/qlib_data/cn_data --output-dir examples/a_share_breakout/outputs --breakout-windows 60 120` |
+| 运行日期 | 2026-05-17 |
+| 事件窗口 | 2021-01-04 至 2026-03-19 |
+| 事件数 | 227550 |
+| 图表数 | 6 |
+| 报告 | `examples/a_share_breakout/outputs/event_study_report.md` |
+
+阶段 5 验证记录：
+
+| 命令 | 结果 |
+|---|---|
+| `python -m py_compile examples/a_share_breakout/event_study.py` | 通过 |
+| `pytest -q tests/test_a_share_breakout_event_study.py` | 通过：4 个测试 |
+| `python examples/a_share_breakout/event_study.py --provider-uri ~/.qlib/qlib_data/cn_data --output-dir examples/a_share_breakout/outputs --breakout-windows 60 120` | 通过，并生成阶段 5 报告、统计表和 6 张图 |
