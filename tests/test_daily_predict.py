@@ -15,6 +15,7 @@ def load_script_module(name, path):
 
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
+REPO_ROOT = SCRIPTS_DIR.parent
 daily_predict = load_script_module("daily_predict", SCRIPTS_DIR / "daily_predict.py")
 
 
@@ -98,6 +99,30 @@ def test_output_path_for_date_uses_template(tmp_path):
     assert output_path == tmp_path / "preds" / "lightgbm_2026-04-17_abc123.csv"
 
 
+def test_read_instrument_name_map_supports_common_cn_columns(tmp_path):
+    names_file = tmp_path / "instrument_names.csv"
+    names_file.write_text(
+        """
+证券代码,证券简称
+000001.SZ,平安银行
+600000.SH,浦发银行
+""".strip(),
+        encoding="utf-8",
+    )
+
+    names = daily_predict.read_instrument_name_map(names_file, tmp_path)
+
+    assert names == {"SZ000001": "平安银行", "SH600000": "浦发银行"}
+
+
+def test_default_instrument_name_map_is_readable():
+    names = daily_predict.read_instrument_name_map("configs/instrument_names.csv", REPO_ROOT)
+
+    assert names["SH000300"] == "沪深300指数"
+    assert names["SZ000001"] == "平安银行"
+    assert names["SH600000"] == "浦发银行"
+
+
 def test_prediction_to_result_frame_filters_sorts_and_limits():
     index = pd.MultiIndex.from_tuples(
         [
@@ -110,11 +135,28 @@ def test_prediction_to_result_frame_filters_sorts_and_limits():
     )
     pred = pd.DataFrame({"score": [0.1, 0.2, 0.4, 0.3]}, index=index)
 
-    result = daily_predict.prediction_to_result_frame(pred, pd.Timestamp("2026-04-17"), topk=2)
+    result = daily_predict.prediction_to_result_frame(
+        pred,
+        pd.Timestamp("2026-04-17"),
+        topk=2,
+        instrument_names={"SZ000001": "平安银行", "SH600519": "贵州茅台"},
+    )
 
     assert result.to_dict("records") == [
-        {"datetime": "2026-04-17", "rank": 1, "instrument": "SZ000001", "score": 0.4},
-        {"datetime": "2026-04-17", "rank": 2, "instrument": "SH600519", "score": 0.3},
+        {
+            "datetime": "2026-04-17",
+            "rank": 1,
+            "instrument": "SZ000001",
+            "instrument_name": "平安银行",
+            "score": 0.4,
+        },
+        {
+            "datetime": "2026-04-17",
+            "rank": 2,
+            "instrument": "SH600519",
+            "instrument_name": "贵州茅台",
+            "score": 0.3,
+        },
     ]
 
 
@@ -127,5 +169,6 @@ def test_prediction_to_result_frame_renames_single_score_column():
 
     result = daily_predict.prediction_to_result_frame(pred, pd.Timestamp("2026-04-17"), topk=None)
 
-    assert result.columns.tolist() == ["datetime", "rank", "instrument", "score"]
+    assert result.columns.tolist() == ["datetime", "rank", "instrument", "instrument_name", "score"]
+    assert result.loc[0, "instrument_name"] == ""
     assert result.loc[0, "score"] == 0.2

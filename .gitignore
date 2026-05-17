@@ -13,6 +13,8 @@ dist/
 *.pkl
 *.hd5
 *.csv
+!configs/
+!configs/instrument_names.csv
 
 .env
 .vim

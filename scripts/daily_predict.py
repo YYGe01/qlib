@@ -31,6 +31,27 @@ from qlib.workflow import R
 
 LOGGER = logging.getLogger("daily_predict")
 DEFAULT_CONFIG = "examples/benchmarks/LightGBM/daily_predict_lightgbm_Alpha158_2026.yaml"
+INSTRUMENT_NAME_CODE_COLUMNS = (
+    "instrument",
+    "symbol",
+    "code",
+    "ts_code",
+    "证券代码",
+    "股票代码",
+    "代码",
+)
+INSTRUMENT_NAME_TEXT_COLUMNS = (
+    "instrument_name",
+    "name",
+    "stock_name",
+    "sec_name",
+    "证券简称",
+    "股票简称",
+    "中文名称",
+    "证券名称",
+    "名称",
+    "简称",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -153,6 +174,79 @@ def read_instruments_file(path: str | Path, base_dir: Path) -> list[str]:
     return instruments
 
 
+def normalize_instrument_code(value: Any) -> str:
+    text = str(value).strip().upper()
+    if not text or text == "NAN":
+        return ""
+
+    if "." in text:
+        code, exchange = text.split(".", maxsplit=1)
+        if code.isdigit() and exchange in {"SH", "SZ", "BJ"}:
+            return f"{exchange}{code.zfill(6)}"
+
+    if len(text) == 8 and text[:2] in {"SH", "SZ", "BJ"}:
+        return text
+
+    if len(text) == 6 and text.isdigit():
+        if text.startswith(("60", "68", "90")):
+            return f"SH{text}"
+        if text.startswith(("00", "20", "30")):
+            return f"SZ{text}"
+        if text.startswith(("43", "83", "87", "88", "92")):
+            return f"BJ{text}"
+    return text
+
+
+def _read_instrument_name_frame(path: Path) -> pd.DataFrame:
+    last_error: Exception | None = None
+    for encoding in ("utf-8-sig", "utf-8", "gbk"):
+        try:
+            return pd.read_csv(path, dtype=str, sep=None, engine="python", encoding=encoding)
+        except UnicodeDecodeError as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    raise ValueError(f"Unable to read instrument name file: {path}")
+
+
+def _find_column(columns: Sequence[str], candidates: Sequence[str], label: str, path: Path) -> str:
+    normalized = {str(column).strip(): column for column in columns}
+    for candidate in candidates:
+        if candidate in normalized:
+            return normalized[candidate]
+    lower_normalized = {str(column).strip().lower(): column for column in columns}
+    for candidate in candidates:
+        if candidate.lower() in lower_normalized:
+            return lower_normalized[candidate.lower()]
+    raise ValueError(f"{path} must contain a {label} column. Supported columns: {', '.join(candidates)}")
+
+
+def read_instrument_name_map(path: str | Path, base_dir: Path) -> dict[str, str]:
+    name_path = resolve_path(path, base_dir)
+    frame = _read_instrument_name_frame(name_path)
+    frame.columns = [str(column).strip() for column in frame.columns]
+
+    code_column = _find_column(frame.columns, INSTRUMENT_NAME_CODE_COLUMNS, "code", name_path)
+    name_column = _find_column(frame.columns, INSTRUMENT_NAME_TEXT_COLUMNS, "name", name_path)
+
+    names: dict[str, str] = {}
+    for _, row in frame[[code_column, name_column]].dropna(how="all").iterrows():
+        instrument = normalize_instrument_code(row[code_column])
+        name = str(row[name_column]).strip()
+        if instrument and name and name.lower() != "nan":
+            names[instrument] = name
+    if not names:
+        raise ValueError(f"No instrument names were found in {name_path}")
+    return names
+
+
+def resolve_instrument_name_map(prediction_config: Mapping[str, Any], base_dir: Path) -> dict[str, str]:
+    name_file = prediction_config.get("instrument_names_file") or prediction_config.get("instrument_name_file")
+    if not name_file:
+        return {}
+    return read_instrument_name_map(name_file, base_dir)
+
+
 def resolve_instruments(prediction_config: Mapping[str, Any], base_dir: Path) -> str | list[str] | dict[str, Any]:
     if prediction_config.get("instruments_file"):
         return read_instruments_file(prediction_config["instruments_file"], base_dir)
@@ -220,6 +314,7 @@ def prediction_to_result_frame(
     pred: pd.Series | pd.DataFrame,
     predict_date: pd.Timestamp,
     topk: int | None,
+    instrument_names: Mapping[str, str] | None = None,
 ) -> pd.DataFrame:
     if isinstance(pred, pd.Series):
         pred = pred.to_frame("score")
@@ -251,7 +346,15 @@ def prediction_to_result_frame(
         result = result.head(topk).copy()
     result.insert(0, "rank", range(1, len(result) + 1))
     result["datetime"] = result["datetime"].dt.strftime("%Y-%m-%d")
-    return result[["datetime", "rank", "instrument", "score"]]
+    normalized_names = {
+        normalized_instrument: str(name).strip()
+        for instrument, name in (instrument_names or {}).items()
+        if (normalized_instrument := normalize_instrument_code(instrument)) and str(name).strip()
+    }
+    result["instrument_name"] = result["instrument"].map(
+        lambda instrument: normalized_names.get(normalize_instrument_code(instrument), "")
+    )
+    return result[["datetime", "rank", "instrument", "instrument_name", "score"]]
 
 
 def save_manifest(path: Path, payload: Mapping[str, Any]) -> None:
@@ -278,6 +381,7 @@ def run_daily_prediction(config: Mapping[str, Any], base_dir: Path, date_overrid
         return output_path
 
     instruments = resolve_instruments(prediction_config, base_dir)
+    instrument_names = resolve_instrument_name_map(prediction_config, base_dir)
     history_window = int(prediction_config.get("history_window", 0))
     start_date = resolve_start_date(predict_date, history_window, freq)
 
@@ -288,7 +392,12 @@ def run_daily_prediction(config: Mapping[str, Any], base_dir: Path, date_overrid
     pred = model.predict(dataset)
 
     topk = prediction_config.get("topk")
-    result = prediction_to_result_frame(pred, predict_date, int(topk) if topk is not None else None)
+    result = prediction_to_result_frame(
+        pred,
+        predict_date,
+        int(topk) if topk is not None else None,
+        instrument_names,
+    )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     result.to_csv(output_path, index=False)
@@ -303,6 +412,9 @@ def run_daily_prediction(config: Mapping[str, Any], base_dir: Path, date_overrid
                 "provider_uri": config.get("qlib_init", {}).get("provider_uri"),
                 "instruments": instruments if isinstance(instruments, str) else f"{len(instruments)} instruments",
                 "rows": int(len(result)),
+                "instrument_name_file": prediction_config.get("instrument_names_file")
+                or prediction_config.get("instrument_name_file"),
+                "instrument_name_missing_count": int((result["instrument_name"] == "").sum()),
                 "score_nan_count": int(result["score"].isna().sum()),
                 "output": str(output_path),
             },

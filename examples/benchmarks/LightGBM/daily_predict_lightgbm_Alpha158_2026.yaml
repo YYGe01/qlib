@@ -43,8 +43,14 @@ prediction:
     # instruments:
     #     - SH600000
     #     - SZ000001
+    # 可选：标的中文名映射文件。cn_data 自带的 instruments 文件通常只有代码和日期，
+    # 没有中文名称；配置后输出 CSV 的 instrument_name 列会按此文件填充。
+    # 文件至少包含 instrument/code/证券代码 之一，以及 instrument_name/name/证券简称 之一。
+    instrument_names_file: "configs/instrument_names.csv"
     history_window: 0
     topk:
+    # 相对路径按运行脚本时的当前目录解析；在项目根目录运行时会输出到
+    # /root/code/qlib/predictions/lightgbm_Alpha158_2026。
     output_dir: "predictions/lightgbm_Alpha158_2026"
     output_filename: "{date}.csv"
     overwrite: false

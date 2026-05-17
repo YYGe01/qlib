@@ -33,6 +33,7 @@ experiment:
 prediction:
     instruments: all
     date: latest
+    instrument_names_file: "configs/instrument_names.csv"
     output_dir: "predictions/lightgbm_Alpha158_2026"
     output_filename: "{date}.csv"
 ```
@@ -64,6 +65,41 @@ prediction:
 
 文件支持一行一个标的，也支持逗号或空格分隔，并允许使用 `#` 写注释。
 
+`cn_data` 自带的 `instruments/*.txt` 通常只有标的代码、开始日期和结束日期，没有中文简称。
+仓库内维护一份永久代码映射字典：
+
+```text
+configs/instrument_names.csv
+```
+
+默认配置已启用这份字典，预测结果里的 `instrument_name` 会按它填充。后续遇到新股、简称变更或退市整理时，
+直接更新这份 CSV 即可。映射文件支持 CSV，常见列名包括：
+
+- 代码列：`instrument`、`symbol`、`code`、`ts_code`、`证券代码`、`股票代码`、`代码`；
+- 名称列：`instrument_name`、`name`、`stock_name`、`证券简称`、`股票简称`、`中文名称`、`证券名称`。
+
+示例：
+
+```csv
+instrument,instrument_name
+SZ000001,平安银行
+SH600000,浦发银行
+```
+
+也支持常见的 `000001.SZ`、`600000.SH` 写法，脚本会转换成 Qlib 使用的 `SZ000001`、`SH600000`。
+
+默认不会在预测前更新行情数据：
+
+```yaml
+data_update:
+    enabled: false
+```
+
+也就是说，当前默认运行只读取已有的 `~/.qlib/qlib_data/cn_data` 和本地 recorder 做推理。
+如果启用 `data_update.enabled: true`，默认更新标的池配置为 `data_update.instruments: all`；
+也可以改成指数池、自选列表或 `instruments_file`。更新耗时取决于你接入的数据源、增量更新脚本和标的数量，
+当前默认配置还没有行情更新脚本，因此本轮没有实测全市场增量更新时间。
+
 ## 运行
 
 在仓库根目录执行：
@@ -89,17 +125,20 @@ python scripts/daily_predict.py --config examples/benchmarks/LightGBM/daily_pred
 输出示例：
 
 ```text
-predictions/lightgbm_Alpha158_2026/2026-04-17.csv
-predictions/lightgbm_Alpha158_2026/2026-04-17.json
+/root/code/qlib/predictions/lightgbm_Alpha158_2026/2026-04-17.csv
+/root/code/qlib/predictions/lightgbm_Alpha158_2026/2026-04-17.json
 ```
 
 CSV 字段：
 
 ```text
-datetime,rank,instrument,score
+datetime,rank,instrument,instrument_name,score
 ```
 
-JSON 是本次运行的简要 manifest，记录日期、recorder、行数、NaN 数量和输出路径。
+JSON 是本次运行的简要 manifest，记录日期、recorder、行数、中文名缺失数量、NaN 数量和输出路径。
+`predictions/` 属于本地运行结果，已被 git 忽略，不会出现在提交里。
+
+本机在默认 `all` 标的池上跑完整预测约 55 秒，当前输出 5186 条预测记录。
 
 ## 可选 cn_data 更新钩子
 
