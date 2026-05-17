@@ -12,24 +12,67 @@ experiment:
     recorder_id: "656273f29b6e46f191d4de56866e52f6"
 
 data_update:
-    # 可选：在预测前调用你自己的 cn_data 增量更新命令。
+    # 在预测前更新 cn_data 日频行情。
+    # source 可选 pool、akshare、baostock、yahoo。
+    # pool 会把标的队列随机分配给 sources 中的多个源；失败或标准化为空的标的会回队列重试。
+    # 如果某个源连续失败，会先冷却退避，多次冷却后本轮禁用。
     # 这里的 instruments 只控制更新命令要更新什么标的池，
     # 可以和下面 prediction.instruments 的预测标的池不同。
-    # 如果你已经在外部更新好数据，保持 enabled: false 即可。
-    enabled: false
+    enabled: true
+    source: pool
+    sources: "baostock,yahoo,akshare"
+    end_date: today
     cwd: "."
     instruments: all
+    work_dir: "~/.qlib/stock_data/cn_daily_update"
+    max_workers: 6
+    source_workers: "baostock=1,yahoo=3,akshare=2"
+    delay: 0
+    retry_count: 4
+    source_consecutive_failures: 3
+    source_cooldown: 10
+    max_source_cooldown: 120
+    source_min_attempts: 20
+    source_error_rate: 0.8
+    source_disable_after_cooldowns: 2
     # 更新标的也可以来自文件，例如一行一个股票代码。
     # instruments_file: "configs/update_universe.txt"
-    command: []
-    # 示例：启用后会把占位符替换成当前配置值再执行。
-    # command:
-    #     - "python"
-    #     - "scripts/your_update_cn_data.py"
-    #     - "--provider-uri"
-    #     - "{provider_uri}"
-    #     - "--instruments"
-    #     - "{data_update_instruments}"
+    # 命令会把占位符替换成当前配置值再执行。
+    command:
+        - "python"
+        - "scripts/update_cn_data.py"
+        - "--provider-uri"
+        - "{provider_uri}"
+        - "--source"
+        - "{data_update_source}"
+        - "--sources"
+        - "{data_update_sources}"
+        - "--instruments"
+        - "{data_update_instruments}"
+        - "--end-date"
+        - "{data_update_end_date}"
+        - "--work-dir"
+        - "{data_update_work_dir}"
+        - "--max-workers"
+        - "{data_update_max_workers}"
+        - "--source-workers"
+        - "{data_update_source_workers}"
+        - "--delay"
+        - "{data_update_delay}"
+        - "--retry-count"
+        - "{data_update_retry_count}"
+        - "--source-consecutive-failures"
+        - "{data_update_source_consecutive_failures}"
+        - "--source-cooldown"
+        - "{data_update_source_cooldown}"
+        - "--max-source-cooldown"
+        - "{data_update_max_source_cooldown}"
+        - "--source-min-attempts"
+        - "{data_update_source_min_attempts}"
+        - "--source-error-rate"
+        - "{data_update_source_error_rate}"
+        - "--source-disable-after-cooldowns"
+        - "{data_update_source_disable_after_cooldowns}"
 
 prediction:
     date: latest

@@ -88,17 +88,19 @@ SH600000,浦发银行
 
 也支持常见的 `000001.SZ`、`600000.SH` 写法，脚本会转换成 Qlib 使用的 `SZ000001`、`SH600000`。
 
-默认不会在预测前更新行情数据：
+默认会在预测前尝试更新行情数据：
 
 ```yaml
 data_update:
-    enabled: false
+    enabled: true
+    source: pool
+    sources: "baostock,yahoo,akshare"
+    instruments: all
 ```
 
-也就是说，当前默认运行只读取已有的 `~/.qlib/qlib_data/cn_data` 和本地 recorder 做推理。
-如果启用 `data_update.enabled: true`，默认更新标的池配置为 `data_update.instruments: all`；
-也可以改成指数池、自选列表或 `instruments_file`。更新耗时取决于你接入的数据源、增量更新脚本和标的数量，
-当前默认配置还没有行情更新脚本，因此本轮没有实测全市场增量更新时间。
+`pool` 是多源负载均衡模式：标的队列会随机分配给 `baostock`、`yahoo`、`akshare`；
+每个标的同一轮只请求一个源，不会把同一个标的同时打到多个源。返回空数据、异常或标准化失败的标的会回到队列，
+下一轮重新分配。某个源如果连续出现网络或接口异常，会先进入冷却退避；多次冷却后本轮禁用该源。
 
 ## 运行
 
@@ -140,31 +142,47 @@ JSON 是本次运行的简要 manifest，记录日期、recorder、行数、中�
 
 本机在默认 `all` 标的池上跑完整预测约 55 秒，当前输出 5186 条预测记录。
 
-## 可选 cn_data 更新钩子
+## cn_data 增量更新
 
-如果你已经有自己的 `cn_data` 增量更新脚本，可以在 YAML 中启用：
+默认 YAML 已接入仓库内的增量更新脚本：
 
 ```yaml
 data_update:
     enabled: true
+    source: pool
+    sources: "baostock,yahoo,akshare"
     cwd: "."
-    instruments: csi300
+    instruments: all
+    work_dir: "~/.qlib/stock_data/cn_daily_update"
+    max_workers: 6
+    source_workers: "baostock=1,yahoo=3,akshare=2"
+    retry_count: 4
+    source_consecutive_failures: 3
+    source_cooldown: 10
+    max_source_cooldown: 120
+    source_disable_after_cooldowns: 2
     command:
         - "python"
-        - "scripts/your_update_cn_data.py"
+        - "scripts/update_cn_data.py"
         - "--provider-uri"
         - "{provider_uri}"
-        - "--instruments"
-        - "{data_update_instruments}"
 ```
 
-命令用列表形式配置，不通过 shell 执行。这个钩子只负责在预测前调用你的数据更新命令；
-具体从哪个数据源下载、是否只更新部分标的、如何转换成 Qlib bin，由你的数据更新脚本负责。
+命令用列表形式配置，不通过 shell 执行。`scripts/update_cn_data.py` 会完成「下载源数据 → 标准化到 Qlib 当前口径 → 写入 cn_data」。
+为避免生产数据半更新，测速时使用 `--dry-run`，只下载和标准化，不写入 `~/.qlib/qlib_data/cn_data`。
 命令里可以使用这些占位符：
 
 - `{provider_uri}`：当前 `qlib_init.provider_uri`，会展开成本机路径；
+- `{data_update_source}`：`data_update.source`；
+- `{data_update_sources}`：`data_update.sources`；
 - `{data_update_instruments}`：`data_update.instruments`，列表会转成逗号分隔；
 - `{data_update_instruments_file}`：`data_update.instruments_file`；
+- `{data_update_work_dir}`：临时源数据和标准化 CSV 目录；
+- `{data_update_max_workers}`：全局最大并发；
+- `{data_update_source_workers}`：每个源的并发上限；
+- `{data_update_retry_count}`：单标的最大尝试次数；
+- `{data_update_source_cooldown}`：源异常后的初始冷却秒数；
+- `{data_update_source_disable_after_cooldowns}`：源冷却多少次后本轮禁用；
 - `{prediction_instruments}`：`prediction.instruments`；
 - `{prediction_instruments_file}`：`prediction.instruments_file`；
 - `{date}`：`prediction.date`。
@@ -178,6 +196,13 @@ data_update:
 ```bash
 python scripts/daily_predict.py --skip-data-update
 ```
+
+本机测速结果：
+
+- `baostock`：5 个标的 dry-run 全成功，约 1.67 秒；20 个活跃预测标的在 pool 中主要由 Baostock 承担。
+- `yahoo`：5 个标的 dry-run 全成功，约 6.64 秒；适合作为并行补充源。
+- `akshare`：指数可用，但股票接口多次连接失败；在 pool 中会被健康检查自动冷却，不作为单独默认源。
+- `pool`：20 个当前预测结果中的活跃标的 dry-run 全成功，约 4.05 秒；按该样本粗略外推，5000 级 SH/SZ 标的的下载和标准化约十几分钟级别，实际取决于当晚网络、源限流、停牌/退市标的比例和失败重试次数。
 
 ## 本地定时
 
