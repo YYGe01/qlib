@@ -170,6 +170,8 @@ data_update:
 
 命令用列表形式配置，不通过 shell 执行。`scripts/update_cn_data.py` 会完成「下载源数据 → 标准化到 Qlib 当前口径 → 写入 cn_data」。
 为避免生产数据半更新，测速时使用 `--dry-run`，只下载和标准化，不写入 `~/.qlib/qlib_data/cn_data`。
+如果 `data_update.instruments` 使用 `csi300` 这类 `cn_data/instruments/<market>.txt` 命名池，
+脚本在写入行情后会同步推进该命名池文件中本轮成功更新标的的结束日期；`all` 仍由 Qlib dump 流程维护。
 命令里可以使用这些占位符：
 
 - `{provider_uri}`：当前 `qlib_init.provider_uri`，会展开成本机路径；
@@ -189,7 +191,8 @@ data_update:
 
 `cn_data` 不必每天全市场完整更新。只要当天预测只读取已更新的标的，Qlib 的 `D.features`
 会按传入的 instruments 取数。风险在于：如果你默认预测 `all`，但只增量更新了小池，
-小池外标的的特征可能为空或最终没有有效 score。因此部分更新时最好同步调整 `prediction.instruments_file`。
+小池外标的的特征可能为空或最终没有有效 score。因此部分更新时最好同步调整预测池；
+如果更新和预测都使用同一个命名池，例如 `csi300`，脚本会自动维护该命名池的结束日期。
 
 临时跳过数据更新：
 

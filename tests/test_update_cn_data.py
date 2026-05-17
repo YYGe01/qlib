@@ -64,6 +64,57 @@ def test_pool_source_helpers_degrade_unhealthy_source():
     assert state.disabled is True
 
 
+def test_resolve_market_name_only_for_named_market_files(tmp_path):
+    provider_uri = tmp_path / "cn_data"
+    instruments_dir = provider_uri / "instruments"
+    instruments_dir.mkdir(parents=True)
+    (instruments_dir / "csi300.txt").write_text("SH600000\t2020-01-01\t2026-04-17\n", encoding="utf-8")
+    (instruments_dir / "all.txt").write_text("SH600000\t2020-01-01\t2026-04-17\n", encoding="utf-8")
+
+    args = type("Args", (), {"instruments": "csi300", "instruments_file": None})()
+    assert update_cn_data.resolve_market_name(args, provider_uri) == "csi300"
+
+    args.instruments = "all"
+    assert update_cn_data.resolve_market_name(args, provider_uri) is None
+
+    args.instruments = "SH600000,SZ000001"
+    assert update_cn_data.resolve_market_name(args, provider_uri) is None
+
+    args.instruments = "csi300"
+    args.instruments_file = "configs/predict_universe.txt"
+    assert update_cn_data.resolve_market_name(args, provider_uri) is None
+
+
+def test_sync_market_instrument_file_updates_active_completed_rows(tmp_path):
+    provider_uri = tmp_path / "cn_data"
+    instruments_dir = provider_uri / "instruments"
+    instruments_dir.mkdir(parents=True)
+    market_file = instruments_dir / "csi300.txt"
+    market_file.write_text(
+        "\n".join(
+            [
+                "SH600000\t2020-01-01\t2026-04-17",
+                "SZ000001\t2020-01-01\t2026-04-17",
+                "SH600001\t2020-01-01\t2025-01-01",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = update_cn_data.sync_market_instrument_file(
+        provider_uri,
+        "csi300",
+        pd.Timestamp("2026-04-17"),
+        pd.Timestamp("2026-05-15"),
+        ["SH600000", "SZ000001", "SH600001"],
+    )
+
+    assert result["updated_rows"] == 2
+    frame = pd.read_csv(market_file, sep=r"\s+", header=None, names=["instrument", "start", "end"])
+    assert frame["end"].tolist() == ["2026-05-15", "2026-05-15", "2025-01-01"]
+
+
 def test_normalize_frame_aligns_to_existing_qlib_scale():
     source_frame = pd.DataFrame(
         {

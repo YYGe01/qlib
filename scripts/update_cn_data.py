@@ -224,6 +224,16 @@ def resolve_instruments(args: argparse.Namespace, provider_uri: Path) -> list[st
     return instruments
 
 
+def resolve_market_name(args: argparse.Namespace, provider_uri: Path) -> str | None:
+    if args.instruments_file:
+        return None
+    name = str(args.instruments).strip()
+    if not name or name == "all" or "," in name or " " in name:
+        return None
+    market_file = provider_uri / "instruments" / f"{name}.txt"
+    return name if market_file.exists() else None
+
+
 def source_supports_instrument(source: str, instrument: str) -> bool:
     code = normalize_instrument_code(instrument)
     if source in {"baostock", "yahoo"}:
@@ -649,6 +659,7 @@ def load_balanced_update(
         },
         "unresolved": unresolved,
         "attempts": dict(attempts),
+        "completed": completed,
     }
 
 
@@ -660,6 +671,49 @@ def dump_update(normalize_dir: Path, provider_uri: Path, max_workers: int) -> No
         max_workers=max_workers,
         exclude_fields="symbol,date",
     ).dump()
+
+
+def sync_market_instrument_file(
+    provider_uri: Path,
+    market_name: str,
+    anchor_date: pd.Timestamp,
+    target_date: pd.Timestamp,
+    updated_instruments: Iterable[str],
+) -> dict[str, Any]:
+    market_file = provider_uri / "instruments" / f"{market_name}.txt"
+    if not market_file.exists():
+        raise FileNotFoundError(f"Market instrument file not found: {market_file}")
+
+    frame = pd.read_csv(
+        market_file,
+        sep=r"\s+",
+        header=None,
+        names=["instrument", "start", "end"],
+        dtype=str,
+    )
+    if frame.empty:
+        raise ValueError(f"Market instrument file is empty: {market_file}")
+
+    updated_set = {normalize_instrument_code(instrument) for instrument in updated_instruments}
+    file_instruments = frame["instrument"].map(normalize_instrument_code)
+    start_dates = pd.to_datetime(frame["start"], errors="coerce")
+    end_dates = pd.to_datetime(frame["end"], errors="coerce")
+    anchor = pd.Timestamp(anchor_date).normalize()
+    target = pd.Timestamp(target_date).normalize()
+    mask = file_instruments.isin(updated_set) & start_dates.le(anchor) & end_dates.ge(anchor)
+
+    updated_rows = int(mask.sum())
+    if updated_rows > 0:
+        frame.loc[mask, "end"] = target.strftime("%Y-%m-%d")
+        frame.to_csv(market_file, sep="\t", header=False, index=False)
+
+    return {
+        "market_name": market_name,
+        "path": str(market_file),
+        "anchor_date": anchor.strftime("%Y-%m-%d"),
+        "target_date": target.strftime("%Y-%m-%d"),
+        "updated_rows": updated_rows,
+    }
 
 
 def write_report(report: Mapping[str, Any], path: str | Path | None) -> None:
@@ -678,6 +732,7 @@ def main() -> None:
 
     provider_uri = resolve_path(args.provider_uri)
     calendar = read_qlib_calendar(provider_uri)
+    old_latest_date = pd.Timestamp(calendar[-1])
     start = pd.Timestamp(args.start_date).normalize() if args.start_date else default_start_date(calendar)
     end = resolve_end_date(args.end_date)
     if end <= start:
@@ -685,6 +740,7 @@ def main() -> None:
 
     source_order = resolve_source_order(args.source, args.sources)
     source_dir, normalize_dir = clean_work_dir(resolve_path(args.work_dir) / args.source, args.keep_work_dir)
+    market_name = resolve_market_name(args, provider_uri)
     resolved_instruments = resolve_instruments(args, provider_uri)
     unsupported_instruments = [
         instrument
@@ -724,10 +780,30 @@ def main() -> None:
     update_seconds = time.perf_counter() - update_start
 
     dump_seconds = 0.0
+    market_instrument_sync: dict[str, Any] | None = None
     if not args.dry_run and update_result["stats"]["normalized"] > 0:
         dump_start = time.perf_counter()
         dump_update(normalize_dir, provider_uri, max_workers=max(1, args.max_workers))
         dump_seconds = time.perf_counter() - dump_start
+        if market_name and args.limit is not None:
+            market_instrument_sync = {"market_name": market_name, "skipped": "limit_set"}
+        elif market_name:
+            new_latest_date = pd.Timestamp(read_qlib_calendar(provider_uri)[-1])
+            if new_latest_date > old_latest_date:
+                market_instrument_sync = sync_market_instrument_file(
+                    provider_uri,
+                    market_name,
+                    old_latest_date,
+                    new_latest_date,
+                    update_result["completed"].keys(),
+                )
+            else:
+                market_instrument_sync = {"market_name": market_name, "skipped": "calendar_not_advanced"}
+    elif market_name:
+        market_instrument_sync = {
+            "market_name": market_name,
+            "skipped": "dry_run" if args.dry_run else "no_normalized_data",
+        }
 
     total_seconds = time.perf_counter() - start_time
     report = {
@@ -750,6 +826,8 @@ def main() -> None:
             "total": round(total_seconds, 3),
         },
     }
+    if market_instrument_sync is not None:
+        report["market_instrument_sync"] = market_instrument_sync
     write_report(report, args.report_path)
 
 
