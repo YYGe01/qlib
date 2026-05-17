@@ -1,0 +1,45 @@
+qlib_init:
+    # Use a lightweight prediction data directory here. Keep the full-market
+    # training cn_data independent, so monthly full-data refreshes do not block
+    # daily selected-universe prediction.
+    provider_uri: "~/.qlib/qlib_data/cn_predict_csi300"
+    region: cn
+
+experiment:
+    # Local MLflow/Qlib recorder location. Relative paths are resolved from the
+    # directory where scripts/daily_predict.py is executed.
+    uri: "mlruns"
+    name: "lightgbm_Alpha158_2026"
+    recorder_id: "656273f29b6e46f191d4de56866e52f6"
+
+data_update:
+    # Optional hook for your own incremental data update command. Keep it
+    # disabled until the prediction data updater is ready.
+    enabled: false
+    cwd: "."
+    command:
+        - "python"
+        - "scripts/update_predict_data.py"
+        - "--source-uri"
+        - "~/.qlib/qlib_data/cn_data"
+        - "--target-uri"
+        - "~/.qlib/qlib_data/cn_predict_csi300"
+        - "--market"
+        - "csi300"
+
+prediction:
+    date: latest
+    freq: day
+    # Fast path: predict a market pool from the prediction data directory.
+    # You can also use instruments_file or an explicit list.
+    instruments: csi300
+    # instruments_file: "configs/predict_universe.txt"
+    # instruments:
+    #     - SH600000
+    #     - SZ000001
+    history_window: 0
+    topk:
+    output_dir: "predictions/lightgbm_Alpha158_2026"
+    output_filename: "{date}.csv"
+    overwrite: false
+    write_manifest: true
