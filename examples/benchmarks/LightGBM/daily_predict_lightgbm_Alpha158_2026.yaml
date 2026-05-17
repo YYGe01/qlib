@@ -14,18 +14,29 @@ experiment:
 
 data_update:
     # Optional hook for your own cn_data incremental update command.
+    # This pool controls what your update command should update. It can differ
+    # from prediction.instruments below.
     # Keep disabled when data has already been updated before this script runs.
     enabled: false
     cwd: "."
+    instruments: all
+    # instruments_file: "configs/update_universe.txt"
     command: []
+    # Example:
+    # command:
+    #     - "python"
+    #     - "scripts/your_update_cn_data.py"
+    #     - "--provider-uri"
+    #     - "{provider_uri}"
+    #     - "--instruments"
+    #     - "{data_update_instruments}"
 
 prediction:
     date: latest
     freq: day
-    # Fast path: predict a market pool from cn_data. If cn_data is only
-    # partially updated daily, prefer instruments_file or an explicit list for
-    # the instruments you updated and want to inspect.
-    instruments: csi300
+    # Default: predict all instruments available from cn_data.
+    # Use instruments_file or an explicit list when you only want selected scores.
+    instruments: all
     # instruments_file: "configs/predict_universe.txt"
     # instruments:
     #     - SH600000

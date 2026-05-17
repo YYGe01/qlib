@@ -18,8 +18,8 @@ SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 daily_predict = load_script_module("daily_predict", SCRIPTS_DIR / "daily_predict.py")
 
 
-def test_resolve_instruments_defaults_to_csi300(tmp_path):
-    assert daily_predict.resolve_instruments({}, tmp_path) == "csi300"
+def test_resolve_instruments_defaults_to_all(tmp_path):
+    assert daily_predict.resolve_instruments({}, tmp_path) == "all"
 
 
 def test_resolve_instruments_from_file(tmp_path):
@@ -43,6 +43,47 @@ def test_run_data_update_rejects_empty_command(tmp_path):
 
     with pytest.raises(TypeError, match="data_update.command"):
         daily_predict.run_data_update(config, tmp_path)
+
+
+def test_run_data_update_formats_update_pool(monkeypatch, tmp_path):
+    calls = {}
+
+    def fake_run(command, cwd, check):
+        calls["command"] = command
+        calls["cwd"] = cwd
+        calls["check"] = check
+
+    monkeypatch.setattr(daily_predict.subprocess, "run", fake_run)
+    config = {
+        "qlib_init": {"provider_uri": "~/.qlib/qlib_data/cn_data"},
+        "data_update": {
+            "enabled": True,
+            "cwd": ".",
+            "instruments": ["SH600000", "SZ000001"],
+            "command": [
+                "python",
+                "update.py",
+                "--provider-uri",
+                "{provider_uri}",
+                "--instruments",
+                "{data_update_instruments}",
+            ],
+        },
+        "prediction": {"instruments": "all", "date": "latest"},
+    }
+
+    daily_predict.run_data_update(config, tmp_path)
+
+    assert calls["command"] == [
+        "python",
+        "update.py",
+        "--provider-uri",
+        str(Path("~/.qlib/qlib_data/cn_data").expanduser()),
+        "--instruments",
+        "SH600000,SZ000001",
+    ]
+    assert calls["cwd"] == str(tmp_path)
+    assert calls["check"] is True
 
 
 def test_output_path_for_date_uses_template(tmp_path):

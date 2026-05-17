@@ -88,6 +88,41 @@ def init_qlib_from_config(config: Mapping[str, Any], base_dir: Path) -> None:
         qlib.init(**qlib_init)
 
 
+def format_instruments_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, Mapping):
+        if value.get("file"):
+            return str(value["file"])
+        return ",".join(f"{key}={val}" for key, val in value.items())
+    if isinstance(value, (list, tuple)):
+        return ",".join(str(item) for item in value)
+    return str(value)
+
+
+def format_data_update_command(
+    command: Sequence[str],
+    config: Mapping[str, Any],
+    base_dir: Path,
+) -> list[str]:
+    update_config = config.get("data_update", {})
+    prediction_config = config.get("prediction", {})
+    qlib_init = config.get("qlib_init", {})
+    provider_uri = qlib_init.get("provider_uri", "")
+    if isinstance(provider_uri, str):
+        provider_uri = str(resolve_path(provider_uri, base_dir))
+
+    context = {
+        "provider_uri": provider_uri,
+        "data_update_instruments": format_instruments_value(update_config.get("instruments", "")),
+        "data_update_instruments_file": str(update_config.get("instruments_file", "")),
+        "prediction_instruments": format_instruments_value(prediction_config.get("instruments", "all")),
+        "prediction_instruments_file": str(prediction_config.get("instruments_file", "")),
+        "date": str(prediction_config.get("date", "latest")),
+    }
+    return [part.format(**context) for part in command]
+
+
 def run_data_update(config: Mapping[str, Any], base_dir: Path, skip: bool = False) -> None:
     update_config = config.get("data_update", {})
     if skip or not update_config or not update_config.get("enabled", False):
@@ -100,8 +135,9 @@ def run_data_update(config: Mapping[str, Any], base_dir: Path, skip: bool = Fals
         raise TypeError("Every item in data_update.command must be a string.")
 
     cwd = resolve_path(update_config.get("cwd", "."), base_dir)
+    command = format_data_update_command(command, config, base_dir)
     LOGGER.info("Running data update command: %s", " ".join(command))
-    subprocess.run(list(command), cwd=str(cwd), check=True)
+    subprocess.run(command, cwd=str(cwd), check=True)
 
 
 def read_instruments_file(path: str | Path, base_dir: Path) -> list[str]:
@@ -121,7 +157,7 @@ def resolve_instruments(prediction_config: Mapping[str, Any], base_dir: Path) ->
     if prediction_config.get("instruments_file"):
         return read_instruments_file(prediction_config["instruments_file"], base_dir)
 
-    instruments = prediction_config.get("instruments", "csi300")
+    instruments = prediction_config.get("instruments", "all")
     if isinstance(instruments, Mapping) and instruments.get("file"):
         return read_instruments_file(instruments["file"], base_dir)
     if isinstance(instruments, (str, list, tuple, dict)):
