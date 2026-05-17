@@ -101,6 +101,48 @@ python examples/a_share_breakout/breakout_events.py \
 | `python examples/a_share_breakout/breakout_events.py --provider-uri ~/.qlib/qlib_data/cn_data --start-time 2021-01-01` | 通过，并生成阶段 2 事件表 |
 | CSV/Parquet 行数一致性与抽样核对范围审计 | 通过：60/120 日事件表行数一致，抽样事件均覆盖 `T-5` 至 `T+20` |
 
+## 阶段 3：规则指标库与日线失真评分
+
+在仓库根目录执行：
+
+```bash
+python examples/a_share_breakout/daily_features.py \
+  --provider-uri ~/.qlib/qlib_data/cn_data \
+  --start-time 2021-01-01
+```
+
+命令会生成全市场日线面板特征。`feature_matrix_daily.csv` 体积较大，默认只写 CSV；如确实需要 Parquet，可追加 `--write-parquet`。
+
+| 输出文件 | 用途 |
+|---|---|
+| `feature_matrix_daily.csv` | 阶段 1 过滤后的每日股票规则指标矩阵，包含 60/120 日突破强度、均线结构、相对强弱、量能持续性、波动分位、涨停依赖和日线失真评分。 |
+| `feature_dictionary_daily.csv` | 每个已实现、代理实现、研究专用和未实现指标的定义、可见时间、是否可用于交易信号和缺失数据原因。 |
+| `feature_matrix_summary.csv` | 特征矩阵行数、股票数、日期范围、板块分布、候选突破数量和字段非空覆盖。 |
+
+最近一次本地运行：
+
+| 项目 | 值 |
+|---|---|
+| 命令 | `python examples/a_share_breakout/daily_features.py --provider-uri ~/.qlib/qlib_data/cn_data --start-time 2021-01-01` |
+| 运行日期 | 2026-05-17 |
+| 统计窗口 | 2021-01-04 至 2026-04-17 |
+| 输出行数 | 5997259 |
+| 输出标的 | 5553 |
+| 基准指数 | `SH000300` |
+| 60 日候选突破 | 144033 |
+| 120 日候选突破 | 89571 |
+
+阶段 3 的 `fake_prob_daily_t_*` 只使用 T 日收盘前可见的日线代理指标，可用于后续交易信号；`fake_prob_daily_research_*` 和 `next_open_*_research` 使用 T+1 开盘，只能用于事后归因和事件研究。
+
+阶段 3 验证记录：
+
+| 命令 | 结果 |
+|---|---|
+| `python -m py_compile examples/a_share_breakout/daily_features.py` | 通过 |
+| `pytest -q tests/test_a_share_breakout_daily_features.py` | 通过：3 个测试 |
+| `python examples/a_share_breakout/daily_features.py --provider-uri ~/.qlib/qlib_data/cn_data --start-time 2021-01-01` | 通过，并生成阶段 3 特征矩阵、特征字典和摘要 |
+| `feature_matrix_summary.csv` 候选数审计 | 通过：60/120 日候选数与阶段 2 `breakout_event_summary.csv` 一致 |
+
 ## 阶段 0 脚手架
 
 `configs/baseline_60d.yaml` 和 `configs/baseline_120d.yaml` 固定第一版 60 日/120 日突破参数。

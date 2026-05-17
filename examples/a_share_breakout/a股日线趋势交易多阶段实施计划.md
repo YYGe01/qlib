@@ -392,6 +392,17 @@ fake_prob_daily
 - 每个指标有定义、可见时间、是否可用于交易信号的标记。
 - 每个缺失指标有“缺数据原因”和“后续数据源”。
 
+实施记录（2026-05-17）：
+
+- 已实现 `examples/a_share_breakout/daily_features.py`，默认读取本地 `~/.qlib/qlib_data/cn_data`，生成阶段 1 过滤后的日线规则指标矩阵。
+- 已生成 `examples/a_share_breakout/outputs/feature_matrix_daily.csv`、`feature_dictionary_daily.csv`、`feature_matrix_summary.csv`。
+- 本地 2021-01-04 至 2026-04-17 窗口内，输出 5997259 行、5553 个标的，覆盖主板、创业板、科创板、北交所。
+- 阶段 3 特征包含 60/120 日突破位与 ATR 强度、ATR/NATR、MA20/MA60 结构、MA20 斜率、布林带宽、20 日相对 `SH000300` 强弱、单日量比、3 日量能持续性、成交额 252 日分位、涨停依赖代理、一字板代理和日线简化失真评分。
+- `fake_prob_daily_t_60d` / `fake_prob_daily_t_120d` 只使用 T 日及以前可见字段；`fake_prob_daily_research_60d` / `fake_prob_daily_research_120d` 加入 T+1 开盘回吐，只能用于事后归因。
+- `feature_dictionary_daily.csv` 已记录每个指标的定义、可见时间和是否可用于交易信号，并记录缺失的换手率、精确涨跌停价、尾盘 30 分钟、Level-2、资金流、行业强弱和标准 ADX/DMI 所需数据源。
+- `feature_matrix_summary.csv` 中 60 日候选突破 144033 个、120 日候选突破 89571 个，与阶段 2 候选统计一致。
+- 已通过 `python -m py_compile examples/a_share_breakout/daily_features.py`、`pytest -q tests/test_a_share_breakout_daily_features.py` 和全量阶段 3 生成命令。
+
 ### 阶段 4：无训练信号与 qlib 流水线
 
 目标：把规则指标转换成 qlib 可回测的每日股票分数。

@@ -23,6 +23,24 @@ breakout:
   weak_follow_return: 0.03
   false_breakout_drawdown: -0.06
 
+features:
+  benchmark_instrument: "SH000300"
+  ma_fast_window: 20
+  ma_slow_window: 60
+  ma_slope_window: 20
+  bb_window: 20
+  return_window: 20
+  amount_rank_window: 252
+
+distortion_score:
+  daily_t:
+    volume_spike_no_persistence: 0.25
+    limit_dependency_score: 0.20
+    atr_noise_rank_252: 0.15
+    barely_breakout_score: 0.10
+  research_only:
+    next_open_reversal_score: 0.30
+
 execution:
   signal_time: "T 日收盘"
   deal_prices: ["open", "vwap"]
